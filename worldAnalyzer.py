@@ -15,6 +15,11 @@ import cv2
 import mmcv
 import numpy as np
 
+import sys
+sys.path.append("/Users/cameronfranz/Desktop/avatarExperiment1/Resources/mmdetection/")
+sys.path.append("/Users/cameronfranz/Desktop/avatarExperiment1/Resources/mmdetection3d/")
+sys.path.append("/Users/cameronfranz/Desktop/avatarExperiment1/Resources/mmpose/")
+
 from mmpose.apis import (extract_pose_sequence, get_track_id,
 						 inference_pose_lifter_model,
 						 inference_top_down_pose_model, init_pose_model,
@@ -155,7 +160,7 @@ def convert_keypoint_definition(keypoints, pose_det_dataset,
 	# 	'results. See also --smooth.')
 
 def get3dPosesFromVideo(videoPath, numFrames=-1):
-	os.chdir("/Users/cameronfranz/Desktop/avatarExperiment1/mmpose")
+	os.chdir("/Users/cameronfranz/Desktop/avatarExperiment1/Resources/mmpose")
 	assert has_mmdet, 'Please install mmdet to run the demo.'
 
 	class DictObj:
@@ -373,17 +378,17 @@ def get3dPosesFromVideo(videoPath, numFrames=-1):
 		writer.release()
 
 
-videoPath = "/Users/cameronfranz/Desktop/avatarExperiment1/shibuya2Trim.mov"
-# videoPath = "/Users/cameronfranz/Desktop/avatarExperiment1/dancingIrishTrimShort.mp4"
+# videoPath = "/Users/cameronfranz/Desktop/avatarExperiment1/shibuya2Trim.mov"
+# videoPath = "/Users/cameronfranz/Desktop/avatarExperiment1/Resources/shibuyaTrim1.mp4"
+videoPath = "/Users/cameronfranz/Desktop/avatarExperiment1/Resources/dancingIrishTrim.mp4"
 # videoPath = "/Users/cameronfranz/Desktop/avatarExperiment1/shibuyaTrimShort.mp4"
 # videoPath = "/Users/cameronfranz/Desktop/avatarExperiment1/shibuyaTrimExtraShort.mp4"
 # videoPath = "/Users/cameronfranz/Desktop/avatarExperiment1/mmpose/demo/resources/demo.mp4"
 poses = get3dPosesFromVideo(videoPath)
 video = mmcv.VideoReader(videoPath)
 
-len(poses[0])
-
-video.fps
+# len(poses[0])
+# video.fps
 plt.rcParams["axes.grid"] = False
 
 def traverseHierarchy(h, startKey, callback):
@@ -449,41 +454,6 @@ def plot2dPose(keypoints2d):
 		plt.plot([p1[0], p2[0]], [p1[1], p2[1]])
 
 	traverseHierarchy(hierarchy, 0, addToPlot)
-
-
-for frameIdx in range(0,33, 5):
-	poses[frameIdx].sort(key=lambda x: x["track_id"])
-	for pose in poses[frameIdx][1:2]:
-		keypoints3d = pose["keypoints_3d"].copy()
-		keypoints3d[:, 0] = -keypoints3d[:, 0]
-
-		hip = pose["keypoints"][0]
-		# plt.scatter(hip[0], hip[1])
-		# for (jointId, joint) in enumerate(pose["keypoints"]):
-		# 	plt.scatter(joint[0], joint[1], label=jointId, s=0.3, c="red")
-		plot2dPose(pose["keypoints"][:, :2])
-		# plt.imshow(video[frameIdx])
-		# plt.show()
-
-		rightHip3d = pose["keypoints_3d"][1]
-		rightKnee3d = pose["keypoints_3d"][2]
-		# 3d keypoints have standard length between points
-		rightFemur3dto2dProjectionLength = np.linalg.norm(rightHip3d[:2] - rightKnee3d[:2])
-		rightHip2d = pose["keypoints"][1]
-		rightKnee2d = pose["keypoints"][2]
-		rightFemur2dLength = np.linalg.norm(rightHip2d[:2] - rightKnee2d[:2])
-
-		# is scale diff between on the two projections prop to 3d scale?
-		scaleFactor = rightFemur2dLength / rightFemur3dto2dProjectionLength
-		print(scaleFactor)
-		plot3dPose(keypoints3d)
-
-	plt.imshow(video[frameIdx])
-	# plt.legend()
-	plt.show()
-
-poses[0][0]["keypoints"][0]
-poses[10][0]["keypoints"][0]
 
 #------------------------------ UNITY COMMUNICATION ------------------------------
 
@@ -573,54 +543,30 @@ def getJointAngles(keypoints3d):
 	rootRotation = getPoseQuat(keypoints3d[1] - keypoints3d[0], [1, 0, 0])
 	boneAngles["root"] = rootRotation
 
-	# cumulativeRotations = OrderedDict()
-	# cumulativeRotations[0] = np.quaternion(*boneAngles["root"].tolist())
-	# plot3dPose(keypoints3d)
-
-	# def getBoneAngles(x, y):
-	# 	# y = 5; x=4
-	# 	boneId = str(x) + "-" + str(y)
-	# 	boneParents[y] = x
-	# 	vec1 = keypoints3d[y] - keypoints3d[x]
-	# 	vec2 = None
-	# 	if x == 0:
-	# 		vec2 = t_pose_directions[boneId]
-	# 		defaultRot = boneAngles["root"]
-	# 	else:
-	# 		parentBoneId = str(boneParents[x]) + "-" + str(x)
-	# 		vec2 = keypoints3d[x] - keypoints3d[boneParents[x]]
-	# 		plotVecs(vec1, vec2)
-	# 		# defaultRot is the expected rotation if just in t-pose
-	# 		# if reverse direction of x-axis, have to switch order here
-	# 		defaultRot = getPoseQuat(t_pose_directions[parentBoneId], t_pose_directions[boneId])
-	# 		# defaultRot = getPoseQuat(t_pose_directions[boneId], t_pose_directions[parentBoneId])
-	# 	defaultRotQuat = np.quaternion(*defaultRot.tolist())
-	# 	vec2 = quaternion.rotate_vectors([defaultRotQuat], vec2)[0]
-	# 	# plotVecs(vec1, vec2)
-	#
-	# 	# vec2 is orientation of bone if rotation hasn't changed from t-pose, vec1 is actual orientation.
-	# 	localRotation = getPoseQuat(vec1, vec2)
-	# 	applied = quaternion.rotate_vectors([np.quaternion(*localRotation.tolist())], vec2)[0]
-	# 	# plotVecs(vec1, vec2, applied)
-	# 	# vec2
-	# 	# applied = quaternion.rotate_vectors([np.quaternion(*localRotation.tolist())], [-1, 0, 0])[0]
-	# 	# plotVecs([-1, 0, 0], applied)
-	#
-	# 	boneAngles[boneId] = localRotation
-	# 	# fullRotation = np.quaternion(*boneAngles[boneId].tolist()) * cumulativeRotations[x]
-	# 	# cumulativeRotations[y] = fullRotation
-
 	boneParents = {}
 	boneAngles = OrderedDict()
 	# only around vertical y-axis, but should also use neck-root to get a fully specified rotation
 	# PROBLEM: if two vectors opposite, rotation about any axis will work => hence need neck-root axis
-	# hipVec = keypoints3d[1] - keypoints3d[0]
-	# rootRotation = getPoseQuat([hipVec[0], 0, 0], [1, 0, 0])
-	rootRotation = np.array([0, 0, 0, 1])
+
+	# plot3dPose(keypoints3d)
+	hipVec = keypoints3d[1] - keypoints3d[0]
+	spineVec = keypoints3d[7] - keypoints3d[0]
+	bodyCross = np.cross(spineVec, hipVec)
+	basisChange = np.empty((3, 3))
+	basisChange[:, 0] = hipVec/np.linalg.norm(hipVec)
+	basisChange[:, 1] = bodyCross/np.linalg.norm(bodyCross)
+	basisChange[:, 2] = spineVec/np.linalg.norm(spineVec)
+	rootRotation = quaternion.from_rotation_matrix(basisChange, nonorthogonal=True)
+	rootRotation = quaternion.as_float_array(rootRotation)
+	# rootRotation = np.array([0, 0, 0, 1])
 	boneAngles["root"] = rootRotation
 
-	# testVec = [0,1,0]
+	# plotVecs(hipVec*10, [1,0,0])
+	# testVec = [1,0,0]
+	# applied = basisChange @ testVec
 	# applied = quaternion.rotate_vectors([np.quaternion(*rootRotation.tolist())], testVec)[0]
+	# plotVecs(testVec, applied)
+
 	# plotVecs(testVec, applied)
 
 	def getBoneAngles(x, y):
@@ -640,40 +586,23 @@ def getJointAngles(keypoints3d):
 	# cumulativeRotations = {}
 	# cumulativeRotations[0] = np.quaternion(*boneAngles["root"].tolist())
 	def addToSkeleton(x, y):
-		# x = 14
-		# y = 15
 		boneId = str(x) + "-" + str(y)
 		dir = t_pose_directions[boneId]
-		# fullRotation = np.quaternion(*boneAngles[boneId].tolist()) * cumulativeRotations[x]
-		# cumulativeRotations[y] = fullRotation
 		fullRotation = np.quaternion(*boneAngles[boneId].tolist()) #* np.quaternion(*rootRotation.tolist())
-		# fullRotation = cumulativeRotations[y]
 		rotated = quaternion.rotate_vectors([fullRotation], dir)[0]
-		# rotations = [
-		# 	np.quaternion(*boneAngles["root"].tolist()),
-		# 	np.quaternion(*boneAngles[boneId].tolist())
-		# ]
-		# rotated = dir
-		# for r in rotations:
-		# 	rotated = quaternion.rotate_vectors([r], rotated)[0]
-		# fullRotation
-		# plotVecs(dir, rotated)
 		testSkeleton[y] = testSkeleton[x] + rotated
 	# plot3dPose(keypoints3d)
 	# traverseHierarchy(hierarchy, 0, addToSkeleton)
 	# # plot3dPose(testSkeleton)
 
-	# plot3dPose(keypoints3d)
-	# return cumulativeRotations
 	return boneAngles
 
 
 # spawn character with id 15
-message = np.array([1], dtype=np.uint8).tobytes() + np.array([15], dtype=np.int32).tobytes()
-socket.send(message)
-
-# for frameIdx in range(18):
-for frameIdx in range(0, 34, 1):
+# message = np.array([1], dtype=np.uint8).tobytes() + np.array([15], dtype=np.int32).tobytes()
+# socket.send(message)
+avatarWithIdExists = {}
+for frameIdx in range(0, 1209, 1):
 	start = time.time()
 
 	# Send image background to Unity
@@ -681,11 +610,25 @@ for frameIdx in range(0, 34, 1):
 	message = np.insert(img, 0, 0)
 	socket.send(message.tobytes())
 
-	poses[frameIdx].sort(key=lambda x: x["track_id"])
-	for pose in poses[frameIdx][1:2]:
-		# plt.scatter(hip[0], hip[1])
-		# plt.imshow(video[frameIdx])
-		# plt.show()
+	# Despawn Objects no longer in scene
+	existingAvatarIds = set(avatarWithIdExists.keys())
+	idsInScene = []
+	for pose in poses[frameIdx]:
+		idsInScene.append(pose["track_id"])
+	idsToDespawn = existingAvatarIds.difference(idsInScene)
+	for id in idsToDespawn:
+		message = np.array([3], dtype=np.uint8).tobytes() + np.array([id], dtype=np.int32).tobytes()
+		socket.send(message)
+		del avatarWithIdExists[id]
+
+
+	for pose in poses[frameIdx]:
+		# Spawn in new objects
+		trackId = pose["track_id"]
+		if trackId not in avatarWithIdExists:
+			message = np.array([1], dtype=np.uint8).tobytes() + np.array([trackId], dtype=np.int32).tobytes()
+			socket.send(message)
+			avatarWithIdExists[trackId] = True
 
 		#-------------------- SCALING / stand in for z-distance. should use root-neck instead of femur
 
@@ -701,36 +644,16 @@ for frameIdx in range(0, 34, 1):
 		# get target 3d length of spine to send to unity
 		targetSpineLength = spine2dLength * (spine3dLength / spine3dTo2dProjectionLength)
 
-		# np.linalg.norm(np.array([0, 0, 0])- np.array([0, 0.079, -0.007])) * 0.56
-
-
-		# # can get 2d length on screen
-		# # np.linalg.norm(1*rightHip3d[:2] - 1*rightKnee3d[:2])
-		# # if scale points 2x apart, 3d distance increases by 2x. projection distance also increases 2x
-		#
-		# # 1. unity femur length is 1.0
-		# # 2. using python reference model, can see length 1.0 that projects to size X on screen
-		# # 3. target is size Y, so scale the unity model by Y/X
-		# = pose["keypoints_3d"][1]
-		# rightKnee3d = pose["keypoints_3d"][2]
-		# rightFemur3dLength = np.linalg.norm(rightHip3d - rightKnee3d)
-		# rightFemur3dto2dProjectionLength = np.linalg.norm(rightHip3d[:2] - rightKnee3d[:2])
-		# rightHip2d = 10*pose["keypoints"][1] / video.height
-		# rightKnee2d = 10*pose["keypoints"][2] / video.height
-		# rightFemur2dLength = np.linalg.norm(rightHip2d[:2] - rightKnee2d[:2])
-		# targetFemurLength = rightFemur2dLength * (rightFemur3dLength / rightFemur3dto2dProjectionLength)
-		# # print(f"""In current pose, a right femur with length {rightFemur3dLength} projects to a 2d length of {rightFemur3dto2dProjectionLength} on screen. Since the target 2d length on a 10.0x10.0 screen is {rightFemur2dLength}, the target 3d length should be {targetFemurLength}""") #
-
-		# move character with id 15 to pos [0,1,2]
 		hip = pose["keypoints"][0]
 		hipPosUnity = toUnityPosition(hip)
-		hipPosUnity[2] = 0
-		hipPosUnity
-		message = np.array([2], dtype=np.uint8).tobytes() + np.array([15], dtype=np.int32).tobytes() + hipPosUnity.astype(np.float32).tobytes()
+		hipPosUnity[2] = 0 # zero out, since hip[3] is accuracy probability
+		# hipPosUnity[1] += 0.5
+		# hipPosUnity[0] += 2.5
+		message = np.array([2], dtype=np.uint8).tobytes() + np.array([trackId], dtype=np.int32).tobytes() + hipPosUnity.astype(np.float32).tobytes()
 		socket.send(message)
 
 		# scale character with id 15 to have femur length 2.0
-		message = np.array([4], dtype=np.uint8).tobytes() + np.array([15], dtype=np.int32).tobytes() +  np.array([targetSpineLength*0.4], dtype=np.float32).tobytes()
+		message = np.array([4], dtype=np.uint8).tobytes() + np.array([trackId], dtype=np.int32).tobytes() +  np.array([targetSpineLength*0.35], dtype=np.float32).tobytes()
 		# message = np.array([4], dtype=np.uint8).tobytes() + np.array([15], dtype=np.int32).tobytes() +  np.array([1.8], dtype=np.float32).tobytes()
 		socket.send(message)
 
@@ -740,11 +663,6 @@ for frameIdx in range(0, 34, 1):
 			swapYZquat = [quat[0], -quat[1], -quat[3], -quat[2]]
 			xyzwOrderQuat = [swapYZquat[1], swapYZquat[2], swapYZquat[3], swapYZquat[0]]
 			return xyzwOrderQuat
-
-		def quatToUnityTEST(quat):
-			swapYZquat = [quat[0], quat[1], -quat[3], quat[2]]
-			return swapYZquat
-
 
 		keypoints3d = pose["keypoints_3d"].copy()
 		# plot3dPose(keypoints3d)
@@ -760,77 +678,13 @@ for frameIdx in range(0, 34, 1):
 
 		anglesOrderedRaw = [item[1] for item in poseAngles.items()] #assumes dict keeps ordering
 
-		# anglesOrderedRaw = [[1, 0, 0, 0] for i in range(15)]
-		# anglesOrderedRaw[0] = poseAngles["root"]
-		# anglesOrderedRaw[0] = quaternion.as_float_array(poseAngles[0])
-		# anglesOrderedRaw[12] = poseAngles["8-14"]
-		# anglesOrderedRaw[13] = poseAngles["14-15"]
-		# HAVE MISUNDERSTANDING. Because first line below rotates character around z. but second line does not rotate arm around z, even though it would rotate the t-pose arm around z.
-		# anglesOrderedRaw[0] = quaternion.as_float_array(quaternion.from_euler_angles([0, 3.14/2, 0]))
-		# anglesOrderedRaw[11] = quaternion.as_float_array(quaternion.from_euler_angles([0, 3.14/2, 0]))
-		# anglesOrderedRaw[13] = quaternion.as_float_array(quaternion.from_euler_angles([0, 3.14/2, 0]))
-		# anglesOrderedRaw[13] = quaternion.as_float_array(poseAngles[15])
-
-		# testVec = [-1, 0, 0]
-		# applied = quaternion.rotate_vectors([np.quaternion(*quatToUnityTEST(anglesOrderedRaw[13]))], testVec)[0]
 		# applied = quaternion.rotate_vectors([np.quaternion(*anglesOrderedRaw[13])], testVec)[0]
 		# plotVecs(testVec, applied)
 
 		# plot3dPose(testSkeleton)
 		anglesOrderedUnity = np.array([quatToUnity(item) for item in anglesOrderedRaw]).flatten()
-		message = np.array([5], dtype=np.uint8).tobytes() + np.array([15], dtype=np.int32).tobytes() +anglesOrderedUnity.astype(np.float32).tobytes()
+		message = np.array([5], dtype=np.uint8).tobytes() + np.array([trackId], dtype=np.int32).tobytes() +anglesOrderedUnity.astype(np.float32).tobytes()
 		socket.send(message)
-
-
-		# # ------------------------------ POSE ANGLES / sent as quaternions that rotate from default t-pose
-		# # ik with hands, feet, head might be better?
-		# # facing away correct if y positive is farther away
-		# # facing forward correct if y positive is closer
-		# px.scatter_3d(x=pose["keypoints_3d"][:, 0], y=pose["keypoints_3d"][:, 1], z=pose["keypoints_3d"][:, 2])
-		#
-		#
-		# rightHip3d = pose["keypoints_3d"][1]
-		# rightKnee3d = pose["keypoints_3d"][2]
-		# leftHip3d = pose["keypoints_3d"][4]
-		# leftKnee3d = pose["keypoints_3d"][5]
-		# # rotation to align the two vectors https://stackoverflow.com/questions/1171849/finding-quaternion-representing-the-rotation-from-one-vector-to-another
-		#
-		# # Here: x, y, z up
-		# # Unity: x, y up, z
-		# # => must swap last two axes
-		# # quaternion lib represents as w,x,y,z, but unity uses x,y,z,w
-		# #
-		# # def rotCalc:
-		# # 	quat = np.zeros(4)
-		# # 	vec1 = [femurVec[0], femurVec[2], femurVec[1]]
-		# # 	vec1 = vec1 / np.linalg.norm(vec1)
-		# # 	vec2 = [tPoseDir[0], tPoseDir[2], tPoseDir[1]]
-		# # 	quat[1:4] = np.cross(vec2, vec1);
-		# # 	quat[0]= (np.linalg.norm(vec1)* np.linalg.norm(vec2)) + np.dot(vec1, vec2)
-		# # 	quat = quat / np.linalg.norm(quat)
-		# # 	fullRotation = np.quaternion(*quat.tolist())
-		# #
-		# # 	leftHipQuat = getPoseQuat(leftKnee3d-leftHip3d, np.array([0, 0, -1]))
-		# # 	leftHipQuat
-		# # 	fullRotation
-		# # 	leftHipQuat
-		#
-		# leftHipQuatUnity = quatToUnity(getPoseQuat(leftKnee3d-leftHip3d, np.array([0, 0, -1])))
-		# rightHipQuatUnity = quatToUnity(getPoseQuat(rightKnee3d-rightHip3d, np.array([0, 0, -1])))
-		# # leftHipQuat = [leftHipQuatUnity[3], leftHipQuatUnity[0], leftHipQuatUnity[1], leftHipQuatUnity[2]]
-		# # startVec = [0, -1, 0]
-		# # rotatedVec = quaternion.rotate_vectors(np.quaternion(*leftHipQuat), startVec)
-		# # plotVecs(startVec, rotatedVec)
-		#
-		# jointAngles = np.array([leftHipQuatUnity, rightHipQuatUnity]).flatten()
-		# message = np.array([5], dtype=np.uint8).tobytes() + np.array([15], dtype=np.int32).tobytes() +jointAngles.astype(np.float32).tobytes()
-		# socket.send(message)
-		#
-		# # also need rotation, translation of root joint
-		# # def keypoints3dToPoseAngles(keypoints3d):
-		# 	# takes in [17x3] float32array of Body3DH36MDataset keypoints.
-		# 	# outputs joint angles as angles from t-pose
-
 
 	end = time.time()
 	if (end - start < 1.0/video.fps):
