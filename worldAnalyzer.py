@@ -15,6 +15,8 @@ import cv2
 import mmcv
 import numpy as np
 
+import mediapipe as mp
+
 import sys
 sys.path.append("/Users/cameronfranz/Desktop/avatarExperiment1/Resources/mmdetection/")
 sys.path.append("/Users/cameronfranz/Desktop/avatarExperiment1/Resources/mmdetection3d/")
@@ -158,19 +160,17 @@ def convert_keypoint_definition(keypoints, pose_det_dataset,
 	# 	default='configs/_base_/filters/one_euro.py',
 	# 	help='Config file of the filter to smooth the pose estimation '
 	# 	'results. See also --smooth.')
+class DictObj:
+	def __init__(self, in_dict:dict):
+		assert isinstance(in_dict, dict)
+		for key, val in in_dict.items():
+			if isinstance(val, (list, tuple)):
+			   setattr(self, key, [DictObj(x) if isinstance(x, dict) else x for x in val])
+			else:
+			   setattr(self, key, DictObj(val) if isinstance(val, dict) else val)
 
-def get3dPosesFromVideo(videoPath, numFrames=-1):
-	os.chdir("/Users/cameronfranz/Desktop/avatarExperiment1/Resources/mmpose")
+def get3dPosesFromVideoMMPose(videoPath, numFrames=-1):
 	assert has_mmdet, 'Please install mmdet to run the demo.'
-
-	class DictObj:
-		def __init__(self, in_dict:dict):
-			assert isinstance(in_dict, dict)
-			for key, val in in_dict.items():
-				if isinstance(val, (list, tuple)):
-				   setattr(self, key, [DictObj(x) if isinstance(x, dict) else x for x in val])
-				else:
-				   setattr(self, key, DictObj(val) if isinstance(val, dict) else val)
 
 	args = DictObj({
 		"det_config": "demo/mmdetection_cfg/faster_rcnn_r50_fpn_coco.py",
@@ -232,10 +232,8 @@ def get3dPosesFromVideo(videoPath, numFrames=-1):
 
 		# test a single image, the resulting box is (x1, y1, x2, y2)
 		mmdet_results = inference_detector(person_det_model, frame)
-
 		# keep the person class bounding boxes.
-		person_det_results = process_mmdet_results(mmdet_results,
-												   args.det_cat_id)
+		person_det_results = process_mmdet_results(mmdet_results, cat_id=1)
 
 		# make person results for single image
 		pose_det_results, _ = inference_top_down_pose_model(
@@ -247,6 +245,7 @@ def get3dPosesFromVideo(videoPath, numFrames=-1):
 			dataset=pose_det_dataset,
 			return_heatmap=False,
 			outputs=None)
+		pose_det_results
 
 		# get track id for each person instance
 		pose_det_results, next_id = get_track_id(
@@ -377,18 +376,150 @@ def get3dPosesFromVideo(videoPath, numFrames=-1):
 	if save_out_video:
 		writer.release()
 
+def get3dPosesFromVideoMediapipe(videoPath):
+	video = mmcv.VideoReader(videoPath)
+	assert video.opened, f'Failed to load video file {args.video_path}'
+	# Extract bounding boxes
+	os.chdir("/Users/cameronfranz/Desktop/avatarExperiment1/Resources/mmpose")
+	args = DictObj({
+		"det_config": "demo/mmdetection_cfg/faster_rcnn_r50_fpn_coco.py",
+		"det_checkpoint": "https://download.openmmlab.com/mmdetection/v2.0/faster_rcnn/faster_rcnn_r50_fpn_1x_coco/faster_rcnn_r50_fpn_1x_coco_20200130-047c8118.pth",
+		"device": "CPU",
+		"use_oks_tracking": True,
+		"tracking_thr": 0.3,
+		"smooth_filter_cfg": "configs/_base_/filters/one_euro.py",
+	})
+	smoother = Smoother(filter_cfg=args.smooth_filter_cfg, keypoint_dim=3)
+	person_det_model = init_detector(args.det_config, args.det_checkpoint, device=args.device.lower())
+	pose_model = mp.solutions.pose.Pose(static_image_mode=True, model_complexity=2, enable_segmentation=False, min_detection_confidence=0.51)
+
+	next_id = 0
+	pose_det_results_tracked_last = []
+	pose_det_results_list = []
+	for idx, frame in enumerate(mmcv.track_iter_progress(video)):
+		# if (idx == 4):
+		# 	break
+		# frame = video[0]
+		# pose_det_results_last = pose_det_results
+
+		# test a single image, the resulting box is (x1, y1, x2, y2)
+		mmdet_results = inference_detector(person_det_model, frame)
+		# keep the person class bounding boxes.
+		person_det_results = process_mmdet_results(mmdet_results, cat_id=1)
+
+		pose_det_results = []
+		for personDetection in person_det_results:
+			bbox = personDetection["bbox"]
+			confidence = bbox[4]
+			if confidence < 0.9:
+				continue
+			(x1, y1, x2, y2) = (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))
+			personImageBGR = frame[y1:y2, x1:x2] #PIL images are row,col i.e. height,width or y,x
+			personImageRGB = cv2.cvtColor(personImageBGR, cv2.COLOR_BGR2RGB)
+			pose_model_result = pose_model.process(personImageRGB)
+			if not pose_model_result.pose_world_landmarks:
+				# print("Failed to extract pose")
+				# plt.imshow(personImageRGB)
+				# plt.show()
+				continue
+			pose_array_mpformat_world = np.empty((33, 3)) # not in image coords
+			pose_array_mpformat_2d = np.empty((33, 3)) # in image coords
+			for i in range(33):
+				pose_array_mpformat_world[i, 0] = pose_model_result.pose_world_landmarks.landmark[i].x
+				pose_array_mpformat_world[i, 1] = pose_model_result.pose_world_landmarks.landmark[i].y
+				pose_array_mpformat_world[i, 2] = pose_model_result.pose_world_landmarks.landmark[i].z
+				pose_array_mpformat_2d[i, 0] = pose_model_result.pose_landmarks.landmark[i].x
+				pose_array_mpformat_2d[i, 1] = pose_model_result.pose_landmarks.landmark[i].y
+				pose_array_mpformat_2d[i, 2] = pose_model_result.pose_landmarks.landmark[i].z
+			def keypointsMPtoB36M(keypointsMP, is3d=False):
+				keypointsB36M = np.empty((17, 3))
+				# hips
+				keypointsB36M[0] = np.average(keypointsMP[[23, 24]], axis=0)
+				# legs
+				keypointsB36M[[1,2,3,4,5,6]] = keypointsMP[[24, 26, 28, 23, 25, 27]]
+				# spine and thorax and neck
+				keypointsB36M[7] = np.average(keypointsMP[[11, 12, 23, 24]], axis=0)
+				keypointsB36M[8] = np.average(keypointsMP[[11, 12]], axis=0)
+				keypointsB36M[9] = np.average(keypointsMP[[9, 10]], axis=0)
+
+				# est head keypoint by moving back into head from nose in correct dir
+				if (is3d):
+					faceWidthVector = keypointsMP[7] - keypointsMP[8]
+					faceHeightVector = np.average(keypointsMP[[9, 10]], axis=0) - np.average(keypointsMP[[3, 6]], axis=0)
+					faceCross = np.cross(faceWidthVector, faceHeightVector)
+					faceCross = faceCross / np.linalg.norm(faceCross)
+					keypointsB36M[10] = keypointsMP[0] + faceCross * 0.097 *3
+					# print(faceWidthVector, faceHeightVector, keypointsMP[0], faceCross, keypointsB36M[10])
+				else:
+					keypointsB36M[10] = keypointsMP[0]
+				# arms
+				keypointsB36M[[11, 12, 13, 14, 15, 16]] = keypointsMP[[11, 13, 15, 12, 14, 16]]
+				return keypointsB36M
+			pose_array_b36mformat_world = keypointsMPtoB36M(pose_array_mpformat_world, is3d=True)
+			pose_array_b36mformat_2d = keypointsMPtoB36M(pose_array_mpformat_2d)
+
+			keypoints2d = np.empty((17, 3))
+			keypoints2d[:, 0] = bbox[0] + pose_array_b36mformat_2d[:, 0] * personImageBGR.shape[1]
+			keypoints2d[:, 1] = bbox[1] + pose_array_b36mformat_2d[:, 1] * personImageBGR.shape[0]
+			keypoints2d[:, 2] = 0.95 #fake confidence score since model does not output them
+
+			keypoints3d = np.empty((17, 3))
+			# z positive is up. Also reverse x (idk why mmpose does that in orig fn)
+			keypoints3d[..., 0] = -pose_array_b36mformat_world[..., 0]
+			keypoints3d[..., 1] = pose_array_b36mformat_world[..., 2]
+			keypoints3d[..., 2] = -pose_array_b36mformat_world[..., 1]
+			# plot3dPose(keypoints3d)
+
+			# plt.imshow(frame)
+			# for k in keypoints2d:
+			# 	plt.scatter(k[0], k[1])
+			# plt.show()
+			# plt.imshow(frame)
+			# for k in keypoints3d:
+			# 	plt.scatter(k[0], k[2])
+			# plt.xlim(-1, 1)
+			# plt.ylim(-1, 1)
+			# plt.show()
+
+			pose_det_results.append({
+				"bbox": bbox,
+				"keypoints": keypoints2d,
+				"keypoints_3d": keypoints3d,
+			})
+
+		#get_track_id expects the "keypoints" attr to be [x,y,prob]
+		pose_det_results_tracked, next_id = get_track_id(
+			pose_det_results,
+			pose_det_results_tracked_last,
+			next_id,
+			use_oks=args.use_oks_tracking,
+			tracking_thr=args.tracking_thr)
+		pose_det_results_tracked_last = pose_det_results_tracked
+		# pose_det_results_tracked_last[0]["keypoints"].shape
+		# pose_det_results[0]["keypoints"].reshape((-1))
+		# pose_det_results
+
+		pose_det_results_tracked_smooth = smoother.smooth(pose_det_results_tracked)
+		pose_det_results_list.append(copy.deepcopy(pose_det_results_tracked_smooth))
+	poses = pose_det_results_list
+	return poses
 
 # videoPath = "/Users/cameronfranz/Desktop/avatarExperiment1/shibuya2Trim.mov"
 # videoPath = "/Users/cameronfranz/Desktop/avatarExperiment1/Resources/shibuyaTrim1.mp4"
 videoPath = "/Users/cameronfranz/Desktop/avatarExperiment1/Resources/dancingIrishTrim.mp4"
 # videoPath = "/Users/cameronfranz/Desktop/avatarExperiment1/shibuyaTrimShort.mp4"
-# videoPath = "/Users/cameronfranz/Desktop/avatarExperiment1/shibuyaTrimExtraShort.mp4"
+# videoPath = "/Users/cameronfranz/Desktop/avatarExperiment1/Resources/shibuyaTrimExtraShort.mp4"
 # videoPath = "/Users/cameronfranz/Desktop/avatarExperiment1/mmpose/demo/resources/demo.mp4"
-poses = get3dPosesFromVideo(videoPath)
+# poses = get3dPosesFromVideoMMPose(videoPath)
+poses = get3dPosesFromVideoMediapipe(videoPath)
 video = mmcv.VideoReader(videoPath)
 
-# len(poses[0])
-# video.fps
+poses.shape
+#------------------------------
+
+plt.rcParams["axes.grid"] = False
+#------------------------------
+
 plt.rcParams["axes.grid"] = False
 
 def traverseHierarchy(h, startKey, callback):
@@ -456,6 +587,17 @@ def plot2dPose(keypoints2d):
 	traverseHierarchy(hierarchy, 0, addToPlot)
 
 #------------------------------ UNITY COMMUNICATION ------------------------------
+
+# frame = video[0]
+# pose = poses[0][0]
+#
+# plt.imshow(frame)
+# for k in pose["keypoints"]:
+# 	plt.scatter(k[0], k[1])
+# plt.show()
+# plot3dPose(pose["keypoints_3d"])
+# poses[0][0]["keypoints_3d"]
+# poses[0]
 
 import zmq
 import time
@@ -598,6 +740,13 @@ def getJointAngles(keypoints3d):
 	return boneAngles
 
 
+frame = video[0]
+results.segmentation_mask.shape
+frame.shape
+multeed = frame * results.segmentation_mask[:, :, np.newaxis]
+plt.imshow(multeed.astype(np.uint8))
+
+humanSegmenterModel = mp.solutions.selfie_segmentation.SelfieSegmentation(model_selection=0)
 # spawn character with id 15
 # message = np.array([1], dtype=np.uint8).tobytes() + np.array([15], dtype=np.int32).tobytes()
 # socket.send(message)
@@ -606,7 +755,12 @@ for frameIdx in range(0, 1209, 1):
 	start = time.time()
 
 	# Send image background to Unity
-	img = cv2.cvtColor(cv2.flip(video[frameIdx], 0), cv2.COLOR_BGR2RGB).ravel()
+	segmentResults = humanSegmenterModel.process(cv2.cvtColor(video[frameIdx], cv2.COLOR_BGR2RGB))
+	blurred = cv2.blur(video[frameIdx], (100, 100))
+	masked = (video[frameIdx] * (1-segmentResults.segmentation_mask[:, :, np.newaxis])) + (blurred * segmentResults.segmentation_mask[:, :, np.newaxis] * 1.5)
+	masked = np.clip(masked,0,255).astype(np.uint8)
+	# img = cv2.cvtColor(cv2.flip(video[frameIdx], 0), cv2.COLOR_BGR2RGB).ravel()
+	img = cv2.cvtColor(cv2.flip(masked, 0), cv2.COLOR_BGR2RGB).ravel()
 	message = np.insert(img, 0, 0)
 	socket.send(message.tobytes())
 
@@ -644,7 +798,7 @@ for frameIdx in range(0, 1209, 1):
 		# get target 3d length of spine to send to unity
 		targetSpineLength = spine2dLength * (spine3dLength / spine3dTo2dProjectionLength)
 
-		hip = pose["keypoints"][0]
+		hip = [*pose["keypoints"][0].tolist(), 1] # jankily add another point cause toUnityPosition needs list of len >=3
 		hipPosUnity = toUnityPosition(hip)
 		hipPosUnity[2] = 0 # zero out, since hip[3] is accuracy probability
 		# hipPosUnity[1] += 0.5
