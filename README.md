@@ -1,0 +1,3 @@
+- Unity project w/ NuGet-ZeroMQ and canvas setup. Attach .cs to camera
+- mmpose & dependencies. Run .py script with video
+- 
