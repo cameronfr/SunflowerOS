@@ -86,7 +86,7 @@ for idx, frame in enumerate(videoRaw.decode(videoRaw.streams[0])):
 actualFramecount = int(videoStream.base_rate * videoStream.duration * videoStream.time_base)
 videoArray = videoArray[:actualFramecount]
 
-frames = videoArray[0:100]
+frames = videoArray[:]#[0:100]
 
 detectorModule = loadDetector()
 processedFrames = processFramesDetector(frames).repeat((1, 1, 1, 1))
@@ -115,6 +115,106 @@ vis = vis_pose_result(poseModel, frames[frameIdx], pose2dOut, kpt_score_thr=0.0,
 plt.figure(figsize = (10,10))
 plt.imshow(vis)
 
+# testKeypoints2D = np.array([[[-0.4819], [-0.5206], [-0.5085], [-0.5375], [-0.4432], [-0.3901], [-0.3732], [-0.5013], [-0.4795], [-0.4432], [-0.4505], [-0.4408], [-0.3635], [-0.3635], [-0.5206], [-0.4916], [-0.4046]],
+#  [[-0.2152], [-0.2055], [-0.0242], [ 0.1063], [-0.2248], [-0.0508], [ 0.1159], [-0.3118], [-0.4158], [-0.4278], [-0.4689], [-0.3916], [-0.3432], [-0.3771], [-0.3988], [-0.3312], [-0.3698]]]).squeeze().transpose(1, 0)
+# plot2dPose(testKeypoints2D)
+
+person1 = pose2dOut[0]
+bbox = person1["bbox"]
+keypointsB36M = keypointsCOCOToB36M(person1["keypoints"][:, :2])
+bboxWidth = bbox[2] - bbox[0]
+bboxHeight = bbox[3] - bbox[1]
+keypointsNormalized = keypointsB36M[:, :2] - np.array([bbox[0], bbox[1]])[np.newaxis, :]
+keypointsNormalized = keypointsNormalized / np.array([bboxWidth, bboxWidth])[np.newaxis, :]
+keypointsNormalized = (keypointsNormalized - 0.5)  * 2
+keypointsNormalized = keypointsNormalized * 0.23 - np.array([0.5, 0.3])[np.newaxis, :]
+
+testKeypoints2D.shape
+keypointsNormalized.shape
+plot2dPose(keypointsNormalized)
+
+#------------------------------ DynaBOA pose model ------------------------------
+
+import os
+os.chdir("/home/cameron/DynaBOA")
+# from base_adaptor import BaseAdaptor
+import dynaboa_internet
+import utils.kp_utils
+
+options = dynaboa_internet.parser.parse_args("""--expdir exps --expname 3dpw --dataset 3dpw --motionloss_weight 0.8 --retrieval 1 --dynamic_boa 1 --optim_steps 7 --cos_sim_threshold 3.1e-4 --shape_prior_weight 2e-4 --pose_prior_weight 1e-4 --save_res 1""".split(" "))
+myDataloader = None
+def set_dataloader_override(self):
+    self.dataloader = myDataloader
+def save_results_override(*args, **kwargs):
+    print(args, kwargs)
+# dynaboa_internet.BaseAdaptor.set_dataloader = set_dataloader_override
+dynaboa_internet.BaseAdaptor.save_results = save_results_override
+adaptor = dynaboa_internet.Adaptor(options)
+adaptor.excute()
+adaptor.dataloader
+dataloader_output = next(enumerate(adaptor.dataloader))[1]
+dataloader_output.keys()
+
+plt.imshow((dataloader_output["image"].squeeze().numpy().transpose(1, 2, 0) + 2.2) / 2)
+dataloader_output["bbox"]
+
+dataloader_output["image"].shape
+h36m = utils.kp_utils.convert_kps(dataloader_output["smpl_j2d"], "spin", "h36m")
+h36m
+plot2dPose(h36m[0, :, :2])
+
+# abandoned for now, too many steps to setup / messy code
+
+# ------------------------------ Dual Networks ------------------------------
+in1 = np.array([[726.9307 , 535.13824],
+       [627.66113, 462.05984],
+       [754.58734, 555.49805],
+       [726.3472 , 534.7087 ],
+       [805.20355, 592.7597 ],
+       [899.5302 , 662.1993 ],
+       [840.3574 , 618.6386 ],
+       [670.67426, 493.72437],
+       [774.1009 , 569.86316],
+       [809.55615, 595.9638 ],
+       [757.77094, 557.8417 ],
+       [702.81305, 517.3837 ],
+       [848.68115, 624.7663 ],
+       [787.081  , 579.4185 ],
+       [650.6255 , 478.96524],
+       [698.8398 , 514.4588 ],
+       [636.80493, 468.79114]])
+in2 = np.array([[752.07025, 583.1933 ],
+       [712.2081 , 571.10986],
+       [689.0743 , 706.80096],
+       [676.8739 , 787.62683],
+       [793.1561 , 591.71313],
+       [787.1575 , 724.9936 ],
+       [808.67975, 794.7828 ],
+       [768.34875, 510.54123],
+       [766.2095 , 431.42923],
+       [758.2116 , 406.92233],
+       [754.9545 , 344.8456 ],
+       [812.3987 , 452.24612],
+       [807.58716, 538.6665 ],
+       [750.24664, 489.86526],
+       [715.0468 , 441.03467],
+       [681.8384 , 518.0152 ],
+       [683.50336, 468.39264]])
+plt.scatter(in1[:, 0], in1[:, 1])
+plot2dPose(in2)
+
+!ls
+os.chdir("/home/cameron/3D-Multi-Person-Pose/mupots/est_p2ds")
+estP2d1 = np.load("00_01.pkl", allow_pickle=True)
+estP2d1[0].shape
+estP2d1[1][0]
+estP2d[1][0][0]
+plt.hist(estP2d[1].ravel())
+plt.hist(estP2d[1].ravel())
+
+
+#------------------------------ STMO POSE LIFTER ------------------------------
+
 from model.stmo import Model as STMOModel
 from common.opt import opts as STMOOptions
 #
@@ -133,24 +233,6 @@ def loadPoseLifter():
     stmoModel.eval() #input is [B, coordDim(2), frames(243), keypointId(17), 1]
     # normalize keypoints with X / w * 2 - [1, h / w]
     return stmoModel
-
-# testKeypoints2D = np.array([[[-0.4819], [-0.5206], [-0.5085], [-0.5375], [-0.4432], [-0.3901], [-0.3732], [-0.5013], [-0.4795], [-0.4432], [-0.4505], [-0.4408], [-0.3635], [-0.3635], [-0.5206], [-0.4916], [-0.4046]],
-#  [[-0.2152], [-0.2055], [-0.0242], [ 0.1063], [-0.2248], [-0.0508], [ 0.1159], [-0.3118], [-0.4158], [-0.4278], [-0.4689], [-0.3916], [-0.3432], [-0.3771], [-0.3988], [-0.3312], [-0.3698]]]).squeeze().transpose(1, 0)
-# plot2dPose(testKeypoints2D)
-
-person1 = pose2dOut[0]
-bbox = person1["bbox"]
-keypointsB36M = keypointsCOCOToB36M(person1["keypoints"][:, :2])
-bboxWidth = bbox[2] - bbox[0]
-bboxHeight = bbox[3] - bbox[1]
-keypointsNormalized = keypointsB36M[:, :2] - np.array([bbox[0], bbox[1]])[np.newaxis, :]
-keypointsNormalized = keypointsNormalized / np.array([bboxWidth, bboxWidth])[np.newaxis, :]
-keypointsNormalized = (keypointsNormalized - 0.5)  * 2
-keypointsNormalized = keypointsNormalized * 0.23 - np.array([0.5, 0.3])[np.newaxis, :]
-
-testKeypoints2D.shape
-keypointsNormalized.shape
-plot2dPose(keypointsNormalized)
 
 # testInput = testKeypoints2D.transpose(1, 0)[np.newaxis, :, np.newaxis, :, np.newaxis]
 testInput = keypointsNormalized.transpose(1, 0)[np.newaxis, :, np.newaxis, :, np.newaxis]
