@@ -13,7 +13,8 @@ import plotly.express as px
 import matplotlib.pyplot as plt
 plt.style.use("ggplot")
 plt.rcParams["axes.grid"] = False
-%config InlineBackend.figure_format='svg'
+# %config InlineBackend.figure_format='svg'
+%config InlineBackend.figure_format = 'retina'
 
 device = torch.cuda.current_device()
 
@@ -113,27 +114,12 @@ def loadDetector():
 	sum([x.numel() for x in model.parameters()])
 	return model
 
-videoRaw = av.open("/home/cameron/shibuyaTrim1.mp4")
-# videoRaw.seek(3*10**6)
-videoStream = videoRaw.streams[0]
-videoFrames = videoRaw.decode(videoRaw.streams[0])
-videoArray = np.empty((videoStream.frames, videoStream.height, videoStream.width, 3), dtype=np.uint8) #585MB for 10 seconds of video
-for idx, frame in enumerate(videoRaw.decode(videoRaw.streams[0])):
-	videoArray[idx] = np.array(frame.to_image())
-actualFramecount = int(videoStream.base_rate * videoStream.duration * videoStream.time_base)
-videoArray = videoArray[:actualFramecount]
-
-# frames = np.array(Image.open("/home/cameron/Crowdnet3D/demo/input/images/100023.jpg"))[np.newaxis, ...]
-frames = videoArray[:]#[0:100]
-
 detectorModule = loadDetector()
-detectorOut = []
-for frame in frames:
-	detectorOut.append(mmdet.apis.inference_detector(detectorModule, frame[:, :, ::-1]))
-
-# resVis = detectorModule.show_result(frames[61], detectorOut[61], score_thr=0.3, bbox_color=None, text_color=(200, 200, 200), mask_color=None)
-# plt.figure(figsize = (10,10))
-# plt.imshow(resVis)
+def detector2D(frames):
+	detectorOut = []
+	for frame in frames:
+		detectorOut.append(mmdet.apis.inference_detector(detectorModule, frame[:, :, ::-1]))
+	return detectorOut
 
 # ------------------------------ ViTPose ------------------------------
 # uses frames and detectorOut from previous step
@@ -144,65 +130,38 @@ import mmpose.apis
 import copy
 import tqdm
 
-def loadPose2D():
+def loadPose2DModel():
 	os.chdir("/home/cameron/")
 	modelConfig = "vitpose/configs/body/2d_kpt_sview_rgb_img/topdown_heatmap/coco/ViTPose_large_coco_256x192.py"
 	modelCheckpoint = "vitpose-l-multi-coco.pth" #download from onedrive
 	model = mmpose.apis.init_pose_model(modelConfig, modelCheckpoint, device) # this is a torch module.
 	sum([x.numel() for x in model.parameters()])
 	return model
-poseModel = loadPose2D()
-len(detectorOut)
+poseModel = loadPose2DModel()
 
-posesByFrame = []
-nextTrackId = 0
-lastPose2dOutWithTrackId = []
-for frameIdx, detectionsInFrame in tqdm.tqdm(enumerate(detectorOut)):
-	people = detectionsInFrame[0]
+def pose2D(frame, detections2D, lastPose2dOutWithTrackId, nextTrackId, score_thr=0.5):
+	people = detections2D[0]
 	confidences = people[:, 4]
-	peopleBboxes = [{"bbox": x} for x in people[confidences > 0.1]]
-	pose2dOut, _ = inference_top_down_pose_model(poseModel, frames[frameIdx][:, :, ::-1], person_results=peopleBboxes, bbox_thr=0.0, format="xyxy")
+	peopleBboxes = [{"bbox": x} for x in people[confidences > score_thr]]
+	pose2dOut, _ = mmpose.apis.inference_top_down_pose_model(poseModel, frames[frameIdx][:, :, ::-1], person_results=peopleBboxes, bbox_thr=0.0, format="xyxy")
 
 	# pose2dOut is list of {"keypoints" ..., "bbox": ...}, and pose2dOutWithTrackId adds a "track id" to each dict.
-	pose2dOutWithTrackId, nextTrackId = get_track_id(pose2dOut, copy.deepcopy(lastPose2dOutWithTrackId), nextTrackId, use_oks=True, tracking_thr=0.3) # code deletes objs in last pose...
-	posesByFrame.append(pose2dOutWithTrackId)
-	lastPose2dOutWithTrackId = pose2dOutWithTrackId
+	pose2dOutWithTrackId, nextTrackId = mmpose.apis.get_track_id(pose2dOut, copy.deepcopy(lastPose2dOutWithTrackId), nextTrackId, use_oks=True, tracking_thr=0.3) # code deletes objs in last pose...
+	return (pose2dOutWithTrackId, nextTrackId)
 
-	# vis = vis_pose_result(poseModel, frames[frameIdx], pose2dOut, kpt_score_thr=0.0, radius=4, thickness=2)
-	# plt.figure(figsize = (10,10))
-	# plt.imshow(vis)
-	# break
+# posesByTrackId = {}
+# for frameIdx, poses in enumerate(posesByFrame):
+# 	for pose in poses:
+# 		track_id = pose["track_id"]
+# 		if track_id not in posesByTrackId:
+# 			posesByTrackId[track_id] = []
+# 		else:
+# 			if posesByTrackId[track_id][-1]["frameIdx"] != frameIdx - 1:
+# 				raise "track is non contiguous, not expected"
+# 		pose["frameIdx"] = frameIdx
+# 		posesByTrackId[track_id].append(pose)
 
-# vis = vis_pose_result(poseModel, frames[61], posesByFrame[61], kpt_score_thr=0.1, radius=4, thickness=2)
-# plt.figure(figsize = (10,10))
-# plt.imshow(vis)
-
-posesByTrackId = {}
-for frameIdx, poses in enumerate(posesByFrame):
-	for pose in poses:
-		track_id = pose["track_id"]
-		if track_id not in posesByTrackId:
-			posesByTrackId[track_id] = []
-		else:
-			if posesByTrackId[track_id][-1]["frameIdx"] != frameIdx - 1:
-				raise "track is non contiguous, not expected"
-		pose["frameIdx"] = frameIdx
-		posesByTrackId[track_id].append(pose)
-
-# ------------------------------ CrowdPose3d ------------------------------
-# uses posesByTrackId and frames
-
-vis = vis_pose_result(poseModel, frames[posesByTrackId[0][0]["frameIdx"]], [posesByTrackId[0][0]], kpt_score_thr=0.0, radius=4, thickness=2)
-plt.figure(figsize = (10,10))
-plt.imshow(vis)
-plot2dPose(keypointsCOCOToB36M(posesByTrackId[0][0]["keypoints"]))
-import json
-pose2d_result_path = '/home/cameron/Crowdnet3D/demo/input/2d_pose_result.json'
-with open(pose2d_result_path) as f:
-	pose2d_result = json.load(f)
-poses = np.array(pose2d_result["100023.jpg"])
-poses.shape
-plot2dPose(keypointsCOCOToB36M(poses[0]))
+# ------------------------------ CrowdPose3D ------------------------------
 
 os.chdir("/home/cameron/Crowdnet3D/demo")
 import sys
@@ -253,27 +212,8 @@ def add_neck(joint_coord, joints_name):
 
 	return joint_coord
 
-def parse_args():
-	parser = argparse.ArgumentParser()
-	parser.add_argument('--gpu', type=str, dest='gpu_ids')
-	parser.add_argument('--model_path', type=str, default='demo_checkpoint.pth.tar')
-	parser.add_argument('--img_idx', type=str, default='101570')
-
-	args = parser.parse_args(["--gpu", "0"])
-
-	# test gpus
-	if not args.gpu_ids:
-		assert 0, print("Please set proper gpu ids")
-
-	if '-' in args.gpu_ids:
-		gpus = args.gpu_ids.split('-')
-		gpus[0] = int(gpus[0])
-		gpus[1] = int(gpus[1]) + 1
-		args.gpu_ids = ','.join(map(lambda x: str(x), list(range(*gpus))))
-
-	return args
-args = parse_args()
-cfg.set_args(args.gpu_ids, is_test=True)
+# cfg.set_args(args.gpu_ids, is_test=True)
+cfg.set_args("0", is_test=True)
 cfg.render = True
 cudnn.benchmark = True
 
@@ -306,7 +246,7 @@ vis_joints_name = ('Nose', 'L_Eye', 'R_Eye', 'L_Ear', 'R_Ear', 'L_Shoulder', 'R_
 vis_skeleton = ((0, 1), (0, 2), (2, 4), (1, 3), (5, 7), (7, 9), (12, 14), (14, 16), (11, 13), (13, 15), (5, 17), (6, 17), (11, 18), (12, 18), (17, 18), (17, 0), (6, 8), (8, 10),)
 
 # snapshot load
-model_path = args.model_path
+model_path = "demo_checkpoint.pth.tar"
 assert osp.exists(model_path), 'Cannot find model at ' + model_path
 print('Load checkpoint from {}'.format(model_path))
 model = get_model(vertex_num, joint_num, 'test')
@@ -316,41 +256,26 @@ ckpt = torch.load(model_path)
 model.load_state_dict(ckpt['network'], strict=False)
 model.eval()
 
-# prepare input image
 transform = transforms.ToTensor()
-pose2d_result_path = './input/2d_pose_result.json'
-with open(pose2d_result_path) as f:
-	pose2d_result = json.load(f)
 
-# os.getcwd()
-# img_dir = './input/images'
-# for img_name in sorted(pose2d_result.keys()):
-for frameIdx, frame in tqdm.tqdm(enumerate(frames[:])):
-	frameIdx = 61
-	# img_path = osp.join(img_dir, img_name)
-	# image.shape
-	# original_img.shape
-	# original_img = cv2.imread(img_path)
-
-	# coco_joint_list = pose2d_result[img_name]
-	# image = np.array(Image.open(img_path))
-	img_name = f"""frame{frameIdx}.jpg"""
-	img_path = img_name
-	coco_joint_list = [pose["keypoints"].tolist() for pose in posesByFrame[frameIdx]]
-	image = frames[frameIdx]
+# for frameIdx, frame in tqdm.tqdm(enumerate(frames[:])):
+def multiPose3D(frame, poses2D):
+	# img_name = f"""frame{frameIdx}.jpg"""
+	# img_path = img_name
+	# coco_joint_list = [pose["keypoints"].tolist() for pose in posesByFrame[frameIdx]]
+	coco_joint_list = [pose["keypoints"].tolist() for pose in poses2D]
+	image = frame
 	original_img = image[:, :, ::-1]
 	input = original_img.copy()
 	input2 = original_img.copy()
-	# plt.imshow(input)
 	original_img_height, original_img_width = original_img.shape[:2]
-	# np.array(pose2d_result[img_name]).shape
-	# plt.hist(np.array(pose2d_result[img_name])[:, :, 4].ravel())
 
 	drawn_joints = []
 	c = coco_joint_list
 	# manually assign the order of output meshes
 	# coco_joint_list = [c[2], c[0], c[1], c[4], c[3]]
 
+	allOuts = []
 	for idx in range(len(coco_joint_list)):
 		""" 2D pose input setting & hard-coding for filtering """
 		pose_thr = 0.1
@@ -362,8 +287,10 @@ for frameIdx, frame in tqdm.tqdm(enumerate(frames[:])):
 		# filter inaccurate inputs
 		det_score = sum(coco_joint_img[:, 2])
 		if det_score < 1.0:
+			print("Filtered out by sum of joint probs")
 			continue
 		if len(coco_joint_img[:, 2:].nonzero()[0]) < 1:
+			print("Filtered out by joints being zero")
 			continue
 		# filter the same targets
 		tmp_joint_img = coco_joint_img.copy()
@@ -378,7 +305,8 @@ for frameIdx, frame in tqdm.tqdm(enumerate(frames[:])):
 			elif diff.mean() < 20:
 				continue_check = True
 		if continue_check:
-			continue
+			print("(disabled) Filtered out by drawn_joints check")
+			# continue
 		drawn_joints.append(tmp_joint_img)
 
 		""" Prepare model input """
@@ -411,6 +339,7 @@ for frameIdx, frame in tqdm.tqdm(enumerate(frames[:])):
 		meta_info = {'bbox': bbox}
 		with torch.no_grad():
 			out = model(inputs, targets, meta_info, 'test')
+		allOuts.append(out)
 
 		# draw output mesh
 		mesh_cam_render = out['mesh_cam_render'][0].cpu().numpy()
@@ -420,65 +349,152 @@ for frameIdx, frame in tqdm.tqdm(enumerate(frames[:])):
 
 		# generate random color
 		color = colorsys.hsv_to_rgb(np.random.rand(), 0.5, 1.0)
-		original_img = render_mesh_2(original_img, mesh_cam_render, face, {'focal': cfg.focal, 'princpt': princpt}, color=color)
+		original_img = render_mesh(original_img, mesh_cam_render, face, {'focal': cfg.focal, 'princpt': princpt}, color=color)
 		# plt.imshow(original_img[:, :, ::-1])
 		# plt.show()
 
 		# Save output mesh
 		# output_dir = 'output_custom'
-		file_name = f'{output_dir}/{img_path.split("/")[-1][:-4]}_{idx}.jpg'
-	print("file name: ", file_name)
+		# file_name = f'{output_dir}/{img_path.split("/")[-1][:-4]}_{idx}.jpg'
+	# print("file name: ", file_name)
 		# save_obj(mesh_cam_render, face, file_name=f'{output_dir}/{img_path.split("/")[-1][:-4]}_{idx}.obj')
-	cv2.imwrite(file_name, original_img)
+	# cv2.imwrite(file_name, original_img)
+	return (allOuts, original_img[:, :, ::-1])
 
 		# Draw input 2d pose
 		# tmp_joint_img[-1], tmp_joint_img[-2] = tmp_joint_img[-2].copy(), tmp_joint_img[-1].copy()
 		# input = vis_coco_skeleton(input, tmp_joint_img.T, vis_skeleton)
 		# cv2.imwrite(file_name[:-4] + '_2dpose.jpg', input)
 
-import os
-import cv2
-import numpy as np
-from mpl_toolkits.mplot3d import Axes3D
-import matplotlib.pyplot as plt
-import matplotlib as mpl
-import trimesh
-os.environ['PYOPENGL_PLATFORM'] = 'egl'
-os.environ["MESA_GL_VERSION_OVERRIDE"] = "4.1"
-import pyrender
 
-def render_mesh_2(img, mesh, face, cam_param, color=(1.0, 1.0, 0.9, 1.0)):
-    # mesh
-    mesh = trimesh.Trimesh(mesh, face)
-    rot = trimesh.transformations.rotation_matrix(np.radians(180), [1, 0, 0])
-    mesh.apply_transform(rot)
-    material = pyrender.MetallicRoughnessMaterial(metallicFactor=0.0, alphaMode='OPAQUE', baseColorFactor=color)
-    mesh = pyrender.Mesh.from_trimesh(mesh, material=material, smooth=False)
-    scene = pyrender.Scene(bg_color=[0.0, 0.0, 0.0, 0.0], ambient_light=(0.3, 0.3, 0.3))
-    scene.add(mesh, 'mesh')
 
-    focal, princpt = cam_param['focal'], cam_param['princpt']
-    camera = pyrender.IntrinsicsCamera(fx=focal[0], fy=focal[1], cx=princpt[0], cy=princpt[1], zfar=1000.0, znear=0.05)
-    scene.add(camera)
+# ------------------------------ Load Video ------------------------------
 
-    # renderer
-    renderer = pyrender.OffscreenRenderer(viewport_width=img.shape[1], viewport_height=img.shape[0], point_size=1.0)
 
-    # light
-    light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=0.8)
-    light_pose = np.eye(4)
-    light_pose[:3, 3] = np.array([0, -1, 1])
-    scene.add(light, pose=light_pose)
-    light_pose[:3, 3] = np.array([0, 1, 1])
-    scene.add(light, pose=light_pose)
-    light_pose[:3, 3] = np.array([1, 1, 2])
-    scene.add(light, pose=light_pose)
+videoRaw = av.open("/home/cameron/shibuyaTrim1.mp4")
+# videoRaw.seek(3*10**6)
+videoStream = videoRaw.streams[0]
+videoFrames = videoRaw.decode(videoRaw.streams[0])
+videoArray = np.empty((videoStream.frames, videoStream.height, videoStream.width, 3), dtype=np.uint8) #585MB for 10 seconds of video
+for idx, frame in enumerate(videoRaw.decode(videoRaw.streams[0])):
+	videoArray[idx] = np.array(frame.to_image())
+actualFramecount = int(videoStream.base_rate * videoStream.duration * videoStream.time_base)
+videoArray = videoArray[:actualFramecount]
 
-    # render
-    rgb, depth = renderer.render(scene, flags=pyrender.RenderFlags.RGBA)
-    rgb = rgb[:, :, :3].astype(np.float32)
-    valid_mask = (depth > 0)[:, :, None]
+# frames = np.array(Image.open("/home/cameron/Crowdnet3D/demo/input/images/100023.jpg"))[np.newaxis, ...]
+frames = videoArray[:]#[0:100]
 
-    # save to image
-    img = rgb * valid_mask + img * (1 - valid_mask)
-    return img.astype(np.uint8)
+# ------------------------------ RUN PROCESS ------------------------------
+
+lastPose2dOutWithTrackId = []
+nextTrackId = 0 # Same track ID in a detection <-> same person. nextTrackId increases each time new person detected.
+# for frameIdx in range(len(frames)):
+for frameIdx in range(60, 70, 10):
+	# frameIdx = 61
+	frame = frames[frameIdx]
+
+	detection2D = detector2D([frame])[0]
+	targetVisClass = 0
+	# mmdet.apis.show_result_pyplot(detectorModule, frame[:, :, ::-1], detection2D, score_thr=0.5)
+	vis = detectorModule.show_result(frame, detection2D, score_thr=0.3)
+	plt.figure(figsize = (15,15))
+	plt.imshow(vis)
+
+	# len(list(filter(lambda x: x[4] > 0.4, detection2D[0].tolist())))
+	pose2dOutWithTrackId, nextTrackId = pose2D(frame, detection2D, lastPose2dOutWithTrackId, nextTrackId, score_thr=0.4)
+	lastPose2dOutWithTrackId = pose2dOutWithTrackId
+
+	vis = mmpose.apis.vis_pose_tracking_result(poseModel, frame, pose2dOutWithTrackId, kpt_score_thr=0.3, radius=4, thickness=2)
+	plt.figure(figsize = (15,15))
+	plt.imshow(vis)
+
+	multiPose3DOuts, vis = multiPose3D(frame, pose2dOutWithTrackId)
+	for i in range(len(pose2dOutWithTrackId)):
+		multiPose3DOuts[i]["track_id"] = pose2dOutWithTrackId[i]["track_id"]
+	multiPose3DOuts[0]["joint_cam"].tolist()
+	# multiPose3DOuts[0]
+	# multiPose3DOuts[0]["joint_img"].cpu().shape
+	# plot3dPose(keypointsCOCOToB36M(multiPose3DOuts[0]["joint_img"].cpu().squeeze()))
+	# plt.figure(figsize=(15, 15))
+	# plt.imshow(vis)
+	#
+	# multiPose3DOuts
+	#
+	# multiPose3DOuts[0]["smpl_pose"].shape
+	# multiPose3DOuts[0].keys()
+	# multiPose3DOuts[0]["joint_proj"].shape
+	# multiPose3DOuts[0]["joint_cam"].shape
+	# multiPose3DOuts[0]["joint_img"].shape
+	# plt.scatter(*multiPose3DOuts[0]["joint_proj"][0].transpose(1, 0).cpu())
+
+
+# ------------------------------  JUNK ------------------------------
+# uses posesByTrackId and frames
+
+# vis = vis_pose_result(poseModel, frames[posesByTrackId[0][0]["frameIdx"]], [posesByTrackId[0][0]], kpt_score_thr=0.0, radius=4, thickness=2)
+# plt.figure(figsize = (10,10))
+# plt.imshow(vis)
+# plot2dPose(keypointsCOCOToB36M(posesByTrackId[0][0]["keypoints"]))
+# import json
+# pose2d_result_path = '/home/cameron/Crowdnet3D/demo/input/2d_pose_result.json'
+# with open(pose2d_result_path) as f:
+# 	pose2d_result = json.load(f)
+# poses = np.array(pose2d_result["100023.jpg"])
+# poses.shape
+# plot2dPose(keypointsCOCOToB36M(poses[0]))
+
+# prepare input image
+# pose2d_result_path = './input/2d_pose_result.json'
+# with open(pose2d_result_path) as f:
+# 	pose2d_result = json.load(f)
+
+# os.getcwd()
+# img_dir = './input/images'
+# for img_name in sorted(pose2d_result.keys()):
+
+# import os
+# import cv2
+# import numpy as np
+# from mpl_toolkits.mplot3d import Axes3D
+# import matplotlib.pyplot as plt
+# import matplotlib as mpl
+# import trimesh
+# os.environ['PYOPENGL_PLATFORM'] = 'egl'
+# os.environ["MESA_GL_VERSION_OVERRIDE"] = "4.1"
+# import pyrender
+#
+# def render_mesh_2(img, mesh, face, cam_param, color=(1.0, 1.0, 0.9, 1.0)):
+#     # mesh
+#     mesh = trimesh.Trimesh(mesh, face)
+#     rot = trimesh.transformations.rotation_matrix(np.radians(180), [1, 0, 0])
+#     mesh.apply_transform(rot)
+#     material = pyrender.MetallicRoughnessMaterial(metallicFactor=0.0, alphaMode='OPAQUE', baseColorFactor=color)
+#     mesh = pyrender.Mesh.from_trimesh(mesh, material=material, smooth=False)
+#     scene = pyrender.Scene(bg_color=[0.0, 0.0, 0.0, 0.0], ambient_light=(0.3, 0.3, 0.3))
+#     scene.add(mesh, 'mesh')
+#
+#     focal, princpt = cam_param['focal'], cam_param['princpt']
+#     camera = pyrender.IntrinsicsCamera(fx=focal[0], fy=focal[1], cx=princpt[0], cy=princpt[1], zfar=1000.0, znear=0.05)
+#     scene.add(camera)
+#
+#     # renderer
+#     renderer = pyrender.OffscreenRenderer(viewport_width=img.shape[1], viewport_height=img.shape[0], point_size=1.0)
+#
+#     # light
+#     light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=0.8)
+#     light_pose = np.eye(4)
+#     light_pose[:3, 3] = np.array([0, -1, 1])
+#     scene.add(light, pose=light_pose)
+#     light_pose[:3, 3] = np.array([0, 1, 1])
+#     scene.add(light, pose=light_pose)
+#     light_pose[:3, 3] = np.array([1, 1, 2])
+#     scene.add(light, pose=light_pose)
+#
+#     # render
+#     rgb, depth = renderer.render(scene, flags=pyrender.RenderFlags.RGBA)
+#     rgb = rgb[:, :, :3].astype(np.float32)
+#     valid_mask = (depth > 0)[:, :, None]
+#
+#     # save to image
+#     img = rgb * valid_mask + img * (1 - valid_mask)
+#     return img.astype(np.uint8)
