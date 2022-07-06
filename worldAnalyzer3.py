@@ -371,7 +371,8 @@ def multiPose3D(frame, poses2D):
 # ------------------------------ Load Video ------------------------------
 
 
-videoRaw = av.open("/home/cameron/shibuyaTrim1.mp4")
+# videoRaw = av.open("/home/cameron/shibuyaTrim1.mp4")
+videoRaw = av.open("/home/cameron/Crowdnet3D/squidGame.mp4")
 # videoRaw.seek(3*10**6)
 videoStream = videoRaw.streams[0]
 videoFrames = videoRaw.decode(videoRaw.streams[0])
@@ -389,14 +390,14 @@ frames = videoArray[:]#[0:100]
 lastPose2dOutWithTrackId = []
 nextTrackId = 0 # Same track ID in a detection <-> same person. nextTrackId increases each time new person detected.
 # for frameIdx in range(len(frames)):
-for frameIdx in range(60, 70, 10):
+for frameIdx in range(60,61, 10):
 	# frameIdx = 61
 	frame = frames[frameIdx]
 
 	detection2D = detector2D([frame])[0]
 	targetVisClass = 0
 	# mmdet.apis.show_result_pyplot(detectorModule, frame[:, :, ::-1], detection2D, score_thr=0.5)
-	vis = detectorModule.show_result(frame, detection2D, score_thr=0.3)
+	vis = detectorModule.show_result(frame, detection2D, score_thr=0.4)
 	plt.figure(figsize = (15,15))
 	plt.imshow(vis)
 
@@ -411,21 +412,41 @@ for frameIdx in range(60, 70, 10):
 	multiPose3DOuts, vis = multiPose3D(frame, pose2dOutWithTrackId)
 	for i in range(len(pose2dOutWithTrackId)):
 		multiPose3DOuts[i]["track_id"] = pose2dOutWithTrackId[i]["track_id"]
-	multiPose3DOuts[0]["joint_cam"].tolist()
-	# multiPose3DOuts[0]
-	# multiPose3DOuts[0]["joint_img"].cpu().shape
-	# plot3dPose(keypointsCOCOToB36M(multiPose3DOuts[0]["joint_img"].cpu().squeeze()))
-	# plt.figure(figsize=(15, 15))
-	# plt.imshow(vis)
-	#
-	# multiPose3DOuts
-	#
-	# multiPose3DOuts[0]["smpl_pose"].shape
-	# multiPose3DOuts[0].keys()
-	# multiPose3DOuts[0]["joint_proj"].shape
-	# multiPose3DOuts[0]["joint_cam"].shape
-	# multiPose3DOuts[0]["joint_img"].shape
-	# plt.scatter(*multiPose3DOuts[0]["joint_proj"][0].transpose(1, 0).cpu())
+	plt.figure(figsize=(15, 15))
+	plt.imshow(vis)
+
+	for multiPose3DOut in multiPose3DOuts:
+		bbox = multiPose3DOut['bbox'][0].cpu().numpy()
+		princpt = (bbox[0] + bbox[2] / 2, bbox[1] + bbox[3] / 2)
+
+		# Test with camera w/ an optical center set in intrinsic matrix.
+		# cameraIntrinsics = np.array([ [cfg.focal[0], 0, princpt[0]], [0, cfg.focal[1], princpt[1]], [0,0,1]])
+		# cameraIntrinsics.tolist()
+		# multiPose3DOut["joint_cam"].squeeze().cpu().numpy().T[:, 0].tolist()
+		# pos = cameraIntrinsics @ multiPose3DOut["joint_cam"].squeeze().cpu().numpy().T
+		# pos.tolist()
+		# projectedJointCam = pos.T / pos.T[:, 2, np.newaxis]
+		# plt.figure(figsize=(15, 15))
+		# plt.scatter(princpt[0], princpt[1])
+		# plt.scatter(*projectedJointCam[:, :2].transpose(1,0))
+		# plt.imshow(frame)
+
+		# Put coords into shared space. Want (0,0) optical center. Assuming this is author's intended space (i.e. not changing z)
+		# U_1 = (f_x * x + c_x * z) / z
+		# V_1 = (f_y * y + c_y * z) / z
+		# Then, to get same U_1 and U_2 when c_x and c_y are 0,
+		# X' = x + (c_x * z) / f_x
+		# Y' = y + (c_y * z) / f_y
+		cameraIntrinsics = np.array([ [cfg.focal[0], 0, 0], [0, cfg.focal[1], 0], [0,0,1]])
+		jointsWorld = multiPose3DOut["joint_cam"].squeeze().cpu().numpy().copy()
+		jointsWorld[:, 0] = jointsWorld[:, 0] + ((princpt[0] * jointsWorld[:, 2])/cfg.focal[0])
+		jointsWorld[:, 1] = jointsWorld[:, 1] + ((princpt[1] * jointsWorld[:, 2])/cfg.focal[1])
+		pos = cameraIntrinsics @ jointsWorld.T
+		projectedJointCam = pos.T / pos.T[:, 2, np.newaxis]
+		plt.figure(figsize=(15, 15))
+		plt.scatter(princpt[0], princpt[1])
+		plt.scatter(*projectedJointCam[:, :2].transpose(1,0))
+		plt.imshow(frame)
 
 
 # ------------------------------  JUNK ------------------------------
