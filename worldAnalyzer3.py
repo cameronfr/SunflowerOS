@@ -15,6 +15,7 @@ plt.style.use("ggplot")
 plt.rcParams["axes.grid"] = False
 # %config InlineBackend.figure_format='svg'
 %config InlineBackend.figure_format = 'retina'
+plt.rcParams['figure.figsize'] = [12.0, 8.0]
 
 device = torch.cuda.current_device()
 
@@ -385,6 +386,35 @@ videoArray = videoArray[:actualFramecount]
 # frames = np.array(Image.open("/home/cameron/Crowdnet3D/demo/input/images/100023.jpg"))[np.newaxis, ...]
 frames = videoArray[:]#[0:100]
 
+# ------------------------------ CONNECT TO RENDERER ------------------------------
+
+import zmq
+context = zmq.Context()
+socket = context.socket(zmq.PUSH)
+socket.bind('tcp://*:5558')
+# img = cv2.flip(frames[0], 0).ravel()
+# message = np.insert(img, 0, 0)
+# socket.send(message.tobytes())
+#
+def sendCommand(id, data):
+	message = np.array([id], dtype=np.uint8).tobytes() + data
+	socket.send(message)
+
+
+# Coordinate space: y (2nd coord) is up, z away from camera. T-pose facing towards camera.
+jointSpecCrowdnet = {"names": None, "skeleton": None, "tpose": None}
+jointSpecCrowdnet["names"] = ['Pelvis', 'L_Hip', 'R_Hip', 'Torso', 'L_Knee', 'R_Knee', 'Spine', 'L_Ankle', 'R_Ankle', 'Chest', 'L_Toe', 'R_Toe', 'Neck', 'L_Thorax', 'R_Thorax', 'Head', 'L_Shoulder', 'R_Shoulder', 'L_Elbow', 'R_Elbow', 'L_Wrist', 'R_Wrist', 'L_Hand', 'R_Hand', 'Nose', 'L_Eye', 'R_Eye', 'L_Ear', 'R_Ear', 'Head_Top']
+jointSpecCrowdnet["skeleton"] = [(0, 1), (1, 4), (4, 7), (7, 10), (0, 2), (2, 5), (5, 8), (8, 11), (0, 3), (3, 6), (6, 9), (9, 14), (14, 17), (17, 19), (19, 21), (21, 23), (9, 13), (13, 16), (16, 18), (18, 20), (20, 22), (9, 12), (12, 24), (24, 15), (24, 25), (24, 26), (25, 27), (26, 28), (24, 29)]
+
+jointSpecUnity = {"names": None, "skeleton": None, "tpose": None, "unityNames": None}
+jointSpecUnity["names"] = ['Pelvis',  'L_Hip', 'L_Knee', 'L_Ankle', 'R_Hip', 'R_Knee', 'R_Ankle', 'Spine', 'Chest', 'Neck', 'Head', 'Left_Eye', 'Right_Eye', 'Left_Shoulder', 'Left_Elbow', 'Left_Wrist', 'Right_Shoulder', 'Right_Elbow', 'Right_Wrist']
+jointSpecUnity["unityNames"] = ["Hips", "LeftUpperLeg", "LeftLowerLeg", "LeftFoot", "RightUpperLeg", "RightLowerLeg", "RightFoot", "Spine", "Chest", "Neck", "Head", "LeftEye", "RightEye", "LeftUpperArm", "LeftLowerArm", "LeftHand", "RightUpperArm", "RightLowerArm", "RightHand"] # HumanBodyBones names
+jointSpecUnity["skeleton"] = [(0, 1), (1,2), (2,3), (0,4), (4,5), (5,6), (0, 7), (7,8), (8,9), (9,10), (10, 11), (10, 12), (8, 13), (13,14), (14,15), (8,16), (16,17), (17,18)]
+jointSpecUnity["tpose"] = [[1, 0, 0], [0, -1, 0], [0, -1, 0], [-1, 0, 0], [0, -1, 0], [0, -1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0], [1, 0, 0], [-1, 1, 0], [-1, 0, 0], [-1, 0, 0]]
+for idx, pair in enumerate(jointSpecUnity["skeleton"]):
+	print(jointSpecUnity["unityNames"][pair[0]], jointSpecUnity["unityNames"][pair[1]])
+	print(jointSpecUnity["tpose"][idx])
+
 # ------------------------------ RUN PROCESS ------------------------------
 
 lastPose2dOutWithTrackId = []
@@ -393,6 +423,7 @@ nextTrackId = 0 # Same track ID in a detection <-> same person. nextTrackId incr
 for frameIdx in range(60,61, 10):
 	# frameIdx = 61
 	frame = frames[frameIdx]
+	sendCommand(0, cv2.flip(frame, 0).ravel().tobytes())
 
 	detection2D = detector2D([frame])[0]
 	targetVisClass = 0
@@ -415,23 +446,11 @@ for frameIdx in range(60,61, 10):
 	plt.figure(figsize=(15, 15))
 	plt.imshow(vis)
 
-	for multiPose3DOut in multiPose3DOuts:
+	allJointsList = []
+	for multiPose3DOut in multiPose3DOuts[:2]:
 		bbox = multiPose3DOut['bbox'][0].cpu().numpy()
 		princpt = (bbox[0] + bbox[2] / 2, bbox[1] + bbox[3] / 2)
-
-		# Test with camera w/ an optical center set in intrinsic matrix.
-		# cameraIntrinsics = np.array([ [cfg.focal[0], 0, princpt[0]], [0, cfg.focal[1], princpt[1]], [0,0,1]])
-		# cameraIntrinsics.tolist()
-		# multiPose3DOut["joint_cam"].squeeze().cpu().numpy().T[:, 0].tolist()
-		# pos = cameraIntrinsics @ multiPose3DOut["joint_cam"].squeeze().cpu().numpy().T
-		# pos.tolist()
-		# projectedJointCam = pos.T / pos.T[:, 2, np.newaxis]
-		# plt.figure(figsize=(15, 15))
-		# plt.scatter(princpt[0], princpt[1])
-		# plt.scatter(*projectedJointCam[:, :2].transpose(1,0))
-		# plt.imshow(frame)
-
-		# Put coords into shared space. Want (0,0) optical center. Assuming this is author's intended space (i.e. not changing z)
+		# Put coords into shared space. Want (0,0) optical center. Assuming this is author's intended space (i.e. not changing z), are there are many possible inverse projections if alter z?
 		# U_1 = (f_x * x + c_x * z) / z
 		# V_1 = (f_y * y + c_y * z) / z
 		# Then, to get same U_1 and U_2 when c_x and c_y are 0,
@@ -443,79 +462,21 @@ for frameIdx in range(60,61, 10):
 		jointsWorld[:, 1] = jointsWorld[:, 1] + ((princpt[1] * jointsWorld[:, 2])/cfg.focal[1])
 		pos = cameraIntrinsics @ jointsWorld.T
 		projectedJointCam = pos.T / pos.T[:, 2, np.newaxis]
-		plt.figure(figsize=(15, 15))
+		allJointsList.append(jointsWorld)
+
 		plt.scatter(princpt[0], princpt[1])
 		plt.scatter(*projectedJointCam[:, :2].transpose(1,0))
-		plt.imshow(frame)
+	plt.imshow(frame)
 
+	sendCommand(1, np.array([0], dtype=np.int32).tobytes()) # spawn a character
+	posTarget = allJointsList[0][0]
+	# sendCommand(2, np.array([0], dtype=np.int32).tobytes() + posTarget.astype(np.float32).tobytes())
+	sendCommand(2, np.array([0], dtype=np.int32).tobytes() + np.array([0,0,0]).astype(np.float32).tobytes())
 
-# ------------------------------  JUNK ------------------------------
-# uses posesByTrackId and frames
-
-# vis = vis_pose_result(poseModel, frames[posesByTrackId[0][0]["frameIdx"]], [posesByTrackId[0][0]], kpt_score_thr=0.0, radius=4, thickness=2)
-# plt.figure(figsize = (10,10))
-# plt.imshow(vis)
-# plot2dPose(keypointsCOCOToB36M(posesByTrackId[0][0]["keypoints"]))
-# import json
-# pose2d_result_path = '/home/cameron/Crowdnet3D/demo/input/2d_pose_result.json'
-# with open(pose2d_result_path) as f:
-# 	pose2d_result = json.load(f)
-# poses = np.array(pose2d_result["100023.jpg"])
-# poses.shape
-# plot2dPose(keypointsCOCOToB36M(poses[0]))
-
-# prepare input image
-# pose2d_result_path = './input/2d_pose_result.json'
-# with open(pose2d_result_path) as f:
-# 	pose2d_result = json.load(f)
-
-# os.getcwd()
-# img_dir = './input/images'
-# for img_name in sorted(pose2d_result.keys()):
-
-# import os
-# import cv2
-# import numpy as np
-# from mpl_toolkits.mplot3d import Axes3D
-# import matplotlib.pyplot as plt
-# import matplotlib as mpl
-# import trimesh
-# os.environ['PYOPENGL_PLATFORM'] = 'egl'
-# os.environ["MESA_GL_VERSION_OVERRIDE"] = "4.1"
-# import pyrender
-#
-# def render_mesh_2(img, mesh, face, cam_param, color=(1.0, 1.0, 0.9, 1.0)):
-#     # mesh
-#     mesh = trimesh.Trimesh(mesh, face)
-#     rot = trimesh.transformations.rotation_matrix(np.radians(180), [1, 0, 0])
-#     mesh.apply_transform(rot)
-#     material = pyrender.MetallicRoughnessMaterial(metallicFactor=0.0, alphaMode='OPAQUE', baseColorFactor=color)
-#     mesh = pyrender.Mesh.from_trimesh(mesh, material=material, smooth=False)
-#     scene = pyrender.Scene(bg_color=[0.0, 0.0, 0.0, 0.0], ambient_light=(0.3, 0.3, 0.3))
-#     scene.add(mesh, 'mesh')
-#
-#     focal, princpt = cam_param['focal'], cam_param['princpt']
-#     camera = pyrender.IntrinsicsCamera(fx=focal[0], fy=focal[1], cx=princpt[0], cy=princpt[1], zfar=1000.0, znear=0.05)
-#     scene.add(camera)
-#
-#     # renderer
-#     renderer = pyrender.OffscreenRenderer(viewport_width=img.shape[1], viewport_height=img.shape[0], point_size=1.0)
-#
-#     # light
-#     light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=0.8)
-#     light_pose = np.eye(4)
-#     light_pose[:3, 3] = np.array([0, -1, 1])
-#     scene.add(light, pose=light_pose)
-#     light_pose[:3, 3] = np.array([0, 1, 1])
-#     scene.add(light, pose=light_pose)
-#     light_pose[:3, 3] = np.array([1, 1, 2])
-#     scene.add(light, pose=light_pose)
-#
-#     # render
-#     rgb, depth = renderer.render(scene, flags=pyrender.RenderFlags.RGBA)
-#     rgb = rgb[:, :, :3].astype(np.float32)
-#     valid_mask = (depth > 0)[:, :, None]
-#
-#     # save to image
-#     img = rgb * valid_mask + img * (1 - valid_mask)
-#     return img.astype(np.uint8)
+	#Format: dim 1 is up-down and is reversed (bigger is lower).
+	# allJoints = np.stack(allJointsList).reshape(-1, 3)
+	# plt.scatter(*allJoints[:, :2].transpose(1, 0))
+	# fig = px.scatter_3d(x=allJoints[:, 0], y=allJoints[:, 2], z=-allJoints[:, 1])
+	# fig.update_traces(marker={'size': 1})
+	# fig.update_layout(scene_aspectmode='data')
+	# fig.show()
