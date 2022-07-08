@@ -55,13 +55,7 @@ def traverseHierarchy(h, startKey, callback):
 		childKey = h
 		callback(parentId, childKey)
 
-# Plots take in B36m format
-def plot3dPose(keypoints3d):
-	# in keypoints, Y(second dim) is up, and Y moves down.
-
-	# keypoint hierarchy starting at root
-	hierarchy = {1: {2: 3}, 4: {5: 6}, 7: {8: {9: 10, 11: {12: 13}, 14: {15: 16}}}}
-	# calls callback(id1, id2) for every bone between joints
+def plot3dPose(keypoints3d, jointSpec):
 	xs = []
 	ys = []
 	zs = []
@@ -70,16 +64,36 @@ def plot3dPose(keypoints3d):
 		p1 = keypoints3d[parentId]
 		p2 = keypoints3d[childId]
 		xs.extend([p1[0], p2[0]])
-		ys.extend([p1[2], p2[2]]) #swap y and z, make down->up up->down
+		ys.extend([p1[2], p2[2]])
 		zs.extend([-p1[1], -p2[1]])
-		boneId = str(parentId) + "-" + str(childId)
+		boneId = str(jointSpec["names"][parentId]) + "-" + str(jointSpec["names"][childId])
 		colors.extend([boneId, boneId])
+	for pair in jointSpec["skeleton"]:
+		addToPlot(*pair)
 
-	traverseHierarchy(hierarchy, 0, addToPlot)
-
-	fig = px.line_3d(x=xs, y=ys, z=zs, color=colors)
-	fig.update_layout(scene_aspectmode='data')
+	fig = px.line_3d(x=xs, y=ys, z=zs, color=colors, labels=dict(x="x", y="z", z="y(negated)"))
+	fig.update_layout(scene_aspectmode='data', )
 	fig.show()
+
+def plotVecs(*args, norm=True):
+	xs = []
+	ys = []
+	zs = []
+	colors = []
+	for i, point in enumerate(args):
+		pointNormed = point/np.linalg.norm(point)
+		xs += [0, pointNormed[0]]
+		ys += [0, pointNormed[2]]
+		zs += [0, -pointNormed[1]]
+		colors += [str(i), str(i)]
+	fig = px.line_3d(x=xs, y=ys, z=zs, color=colors, labels=dict(x="x", y="z", z="y(negated)"))
+	fig.update_layout(
+	    scene = dict(
+	        xaxis = dict(range=[-1,1],),
+	        yaxis = dict(range=[-1,1],),
+	        zaxis = dict(range=[-1,1],),))
+	# fig.update_layout(scene_aspectmode='cube')
+	return fig
 
 def plot2dPose(keypoints2d, overlay=False):
 	hierarchy = {1: {2: 3}, 4: {5: 6}, 7: {8: {9: 10, 11: {12: 13}, 14: {15: 16}}}}
@@ -400,16 +414,16 @@ def sendCommand(id, data):
 	socket.send(message)
 
 
-# Coordinate space: y (2nd coord) is up, z away from camera. T-pose facing towards camera.
+# Coordinate space: y (2nd coord) is down (increasing is down), z away from camera. T-pose facing towards camera.
 jointSpecCrowdnet = {"names": None, "skeleton": None, "tpose": None}
 jointSpecCrowdnet["names"] = ['Pelvis', 'L_Hip', 'R_Hip', 'Torso', 'L_Knee', 'R_Knee', 'Spine', 'L_Ankle', 'R_Ankle', 'Chest', 'L_Toe', 'R_Toe', 'Neck', 'L_Thorax', 'R_Thorax', 'Head', 'L_Shoulder', 'R_Shoulder', 'L_Elbow', 'R_Elbow', 'L_Wrist', 'R_Wrist', 'L_Hand', 'R_Hand', 'Nose', 'L_Eye', 'R_Eye', 'L_Ear', 'R_Ear', 'Head_Top']
 jointSpecCrowdnet["skeleton"] = [(0, 1), (1, 4), (4, 7), (7, 10), (0, 2), (2, 5), (5, 8), (8, 11), (0, 3), (3, 6), (6, 9), (9, 14), (14, 17), (17, 19), (19, 21), (21, 23), (9, 13), (13, 16), (16, 18), (18, 20), (20, 22), (9, 12), (12, 24), (24, 15), (24, 25), (24, 26), (25, 27), (26, 28), (24, 29)]
 
 jointSpecUnity = {"names": None, "skeleton": None, "tpose": None, "unityNames": None}
-jointSpecUnity["names"] = ['Pelvis',  'L_Hip', 'L_Knee', 'L_Ankle', 'R_Hip', 'R_Knee', 'R_Ankle', 'Spine', 'Chest', 'Neck', 'Head', 'Left_Eye', 'Right_Eye', 'Left_Shoulder', 'Left_Elbow', 'Left_Wrist', 'Right_Shoulder', 'Right_Elbow', 'Right_Wrist']
+jointSpecUnity["names"] = ['Pelvis',  'L_Hip', 'L_Knee', 'L_Ankle', 'R_Hip', 'R_Knee', 'R_Ankle', 'Spine', 'Chest', 'Neck', 'Head', 'L_Eye', 'R_Eye', 'L_Shoulder', 'L_Elbow', 'L_Wrist', 'R_Shoulder', 'R_Elbow', 'R_Wrist']
 jointSpecUnity["unityNames"] = ["Hips", "LeftUpperLeg", "LeftLowerLeg", "LeftFoot", "RightUpperLeg", "RightLowerLeg", "RightFoot", "Spine", "Chest", "Neck", "Head", "LeftEye", "RightEye", "LeftUpperArm", "LeftLowerArm", "LeftHand", "RightUpperArm", "RightLowerArm", "RightHand"] # HumanBodyBones names
 jointSpecUnity["skeleton"] = [(0, 1), (1,2), (2,3), (0,4), (4,5), (5,6), (0, 7), (7,8), (8,9), (9,10), (10, 11), (10, 12), (8, 13), (13,14), (14,15), (8,16), (16,17), (17,18)]
-jointSpecUnity["tpose"] = [[1, 0, 0], [0, -1, 0], [0, -1, 0], [-1, 0, 0], [0, -1, 0], [0, -1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0], [1, 0, 0], [-1, 1, 0], [-1, 0, 0], [-1, 0, 0]]
+jointSpecUnity["tpose"] = [[1, 0, 0], [0, 1, 0], [0, 1, 0], [-1, 0, 0], [0, 1, 0], [0, 1, 0], [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, -1, 0], [1, -1, 0], [1, 0, 0], [1, 0, 0], [-1, -1, 0], [-1, 0, 0], [-1, 0, 0]]
 for idx, pair in enumerate(jointSpecUnity["skeleton"]):
 	print(jointSpecUnity["unityNames"][pair[0]], jointSpecUnity["unityNames"][pair[1]])
 	print(jointSpecUnity["tpose"][idx])
@@ -422,13 +436,34 @@ def coordsToUnity(arr):
 	newArr[..., 1] = -arr[..., 1]
 	newArr[..., 2] = arr[..., 2]
 	return newArr
+# Transform from wxyz quat where coord sys is (x, y-down, z-forwards) to xyzw quat where coord sys is (x, y-up, z-forwards)
+def quatToUnity(quat):
+	# negateYQuat = [quat[0], -quat[1], quat[2], -quat[3]]
+	negateYQuat = [quat[0], -quat[1], quat[2], -quat[3]]
+	xyzwOrderQuat = [negateYQuat[1], negateYQuat[2], negateYQuat[3], negateYQuat[0]]
+	return xyzwOrderQuat
+
+# Angle Testing
+# anglesOrderedUnity = np.zeros((13, 4))
+# # anglesOrderedUnity[:, :] = quatToUnity([1, 0, 0, 0])
+# quat = quaternion.from_rotation_vector([0,0, 0.5*np.pi])
+# quat
+# anglesOrderedUnity[:, :] = np.array(quatToUnity(quaternion.as_float_array(quat)))
+# anglesOrderedUnity
+# anglesOrderedUnity = anglesOrderedUnity.flatten()
+# # upVec = np.array([0, 1, 0])
+# # plotVecs(upVec, quaternion.rotate_vectors([quat], upVec)[0])
+# sendCommand(5, np.array([trackId], dtype=np.int32).tobytes() +anglesOrderedUnity.astype(np.float32).tobytes())
 
 # ------------------------------ RUN PROCESS ------------------------------
+
+import quaternion
+from collections import OrderedDict
 
 lastPose2dOutWithTrackId = []
 nextTrackId = 0 # Same track ID in a detection <-> same person. nextTrackId increases each time new person detected.
 # for frameIdx in range(len(frames)):
-for frameIdx in range(60,61, 10):
+for frameIdx in range(600,601, 10):
 	# frameIdx = 61
 	frame = frames[frameIdx]
 	sendCommand(0, cv2.flip(frame, 0).ravel().tobytes())
@@ -469,25 +504,125 @@ for frameIdx in range(60,61, 10):
 		# And similarly y' = y + (z * (c_y_i - img_width/2)) / f_y
 		# z' = z, f_x = f_x_1, f_y = f_y_1
 		# So now, if multiply focal length 5000 camera matrix, will get correct projection to ([-640, 640], [-360, 360])
-		# Next, need to adjust coordinates so that they project in centered way
-		cameraIntrinsics = np.array([ [cfg.focal[0], 0, 0], [0, cfg.focal[1], 0], [0,0,1]])
+
 		jointsWorld = multiPose3DOut["joint_cam"].squeeze().cpu().numpy().copy()
 		jointsWorld[:, 0] = jointsWorld[:, 0] + (((princpt[0] - frame.shape[1]/2) * jointsWorld[:, 2])/cfg.focal[0])
 		jointsWorld[:, 1] = jointsWorld[:, 1] + (((princpt[1] - frame.shape[0]/2) * jointsWorld[:, 2])/cfg.focal[1])
-		pos = cameraIntrinsics @ jointsWorld.T
-		projectedJointCam = pos.T / pos.T[:, 2, np.newaxis]
-		allJointsList.append(jointsWorld)
+
+		# Test the projection of the new global coordinates
+		# cameraIntrinsics = np.array([ [cfg.focal[0], 0, 0], [0, cfg.focal[1], 0], [0,0,1]])
+		# pos = cameraIntrinsics @ jointsWorld.T
+		# projectedJointCam = pos.T / pos.T[:, 2, np.newaxis]
+		# allJointsList.append(jointsWorld)
+		# plt.imshow(frame)
+		# plt.scatter(princpt[0], princpt[1])
+		# plt.scatter(*(projectedJointCam[:, :2] + np.array([frame.shape[1]/2, frame.shape[0]/2])[np.newaxis, :]).transpose(1, 0))
+
+		# Convert joint locations to unity joint locations
+		# Using unity join t-pose, calculate joint global rotation quaternions
+		# Send them over to Unity
+		jointsDefSrc = jointSpecCrowdnet
+		jointsDefDest = jointSpecUnity
+		jointPositions = jointsWorld
+		def sampleOtherJoints(jointPositions, jointsDefSrc, jointsDefDest):
+			# Assumes joint-axis is -2
+			newShape = jointPositions.shape[:-2] + (len(jointsDefDest["names"]),) + (jointPositions.shape[-1],)
+			output = np.zeros(newShape)
+			for idx, destJointName in enumerate(jointsDefDest["names"]):
+				if destJointName not in jointsDefSrc["names"]:
+					raise Exception(f"""Joint from destination {destJointName}  not in src""")
+				jointIndexSrc = jointsDefSrc["names"].index(destJointName)
+				# print(idx, jointIndexSrc)
+				output[idx] = jointPositions[jointIndexSrc]
+			return output
+		# plot3dPose(jointsWorld, jointSpecCrowdnet)
+		jointsUnity = sampleOtherJoints(jointsWorld, jointSpecCrowdnet, jointSpecUnity)
+		# plot3dPose(sampleOtherJoints(jointsWorld, jointSpecCrowdnet, jointSpecUnity), jointSpecUnity)
+
+		def getPoseQuat(sourceVec, tPoseDir):
+			quat = np.zeros(4)
+			vec1 = sourceVec
+			vec1 = vec1 / np.linalg.norm(vec1)
+			vec2 = tPoseDir
+			quat[1:4] = np.cross(vec2, vec1);
+			quat[0]= (np.linalg.norm(vec1)* np.linalg.norm(vec2)) + np.dot(vec1, vec2)
+			quat = quat / np.linalg.norm(quat)
+			return quat
+		def getBoneAngles(jointPositions, jointSpec):
+			# Need better method. Things: 1. when bone is parent of multiple bones, (i.e. chest and hip), its rotation is defined by its multiple children. Here we're using the last-set one for chest, and the manually computed one for root/Pelvis.
+			# 2. Offset-from-skeleton method might twist bone that's not actually twisted, if t-pose-skeleton-vec and joint-vec are aligned already.
+			# jointPositions = jointsUnity
+			# jointSpec = jointSpecUnity
+
+			# Get Rotation of Root Joint. Be careful w/ basis change otherwise might have root joint 180deg which messes with current fragile tpose->angle process.
+			hipVec =  (joints[jointSpecUnity["names"].index("L_Hip")] - joints[jointSpecUnity["names"].index("Pelvis")])
+			spineVec = (joints[jointSpecUnity["names"].index("Spine")] - joints[jointSpecUnity["names"].index("Pelvis")])
+			bodyCross = np.cross(spineVec, hipVec)
+			basisChange = np.empty((3, 3))
+			# basisChange[:, 0] = hipVec/np.linalg.norm(hipVec)
+			# basisChange[:, 1] = bodyCross/np.linalg.norm(bodyCross)
+			# basisChange[:, 2] = spineVec/np.linalg.norm(spineVec)
+			basisChange[:, 0] = hipVec/np.linalg.norm(hipVec)
+			basisChange[:, 1] = -spineVec/np.linalg.norm(spineVec)
+			basisChange[:, 2] = bodyCross/np.linalg.norm(bodyCross)
+			rootRotation = quaternion.from_rotation_matrix(basisChange, nonorthogonal=True)
+			rootQuat = quaternion.as_float_array(rootRotation)
+
+			boneAngles = OrderedDict()
+			testSkeleton = np.zeros(jointPositions.shape)
+
+			for idx, pair in enumerate(jointSpec["skeleton"]):
+				# vec1 = jointPositions[pair[0]] - jointPositions[pair[1]]
+				jointDir =  jointPositions[pair[1]] - jointPositions[pair[0]]
+				tposeVec = jointSpec["tpose"][idx]
+				# plotVecs(jointDir, tposeVec)
+				# Seems weird to apply do the root rotation like this (seems like will cancel out), but if don't do spine (i.e. a very vertical bone) might be rotated wrong way.
+				vec2 = quaternion.rotate_vectors([np.quaternion(*rootQuat.tolist())], tposeVec)[0]
+				rotation = getPoseQuat(jointDir, vec2)
+				fullRotation = np.quaternion(*rotation.tolist()) * np.quaternion(*rootQuat.tolist())
+				boneAngles[jointSpec["names"][pair[0]]] = quaternion.as_float_array(fullRotation)
+
+				# Test skeleton stuff
+				# rotatedSkeleVec = tposeVec
+				rotatedSkeleVec = quaternion.rotate_vectors([fullRotation], tposeVec)[0]
+				# print(jointSpec["names"][pair[0]], jointSpec["names"][pair[1]], jointSpec["tpose"][])
+				testSkeleton[pair[1]] = testSkeleton[pair[0]] + rotatedSkeleVec
+			boneAngles["Pelvis"] = rootQuat
+			# visualizeQuat(rootQuat)
+			# plot3dPose(jointPositions, jointSpec)
+			# plot3dPose(testSkeleton, jointSpec)
+			return boneAngles
+		def visualizeQuat(quat):
+			plot3dPose(jointsWorld, jointSpecCrowdnet)
+			rotatedJoints = quaternion.rotate_vectors(np.quaternion(*quat), jointsWorld)
+			plot3dPose(rotatedJoints, jointSpecCrowdnet)
+		boneAngles = getBoneAngles(jointsUnity, jointSpecUnity)
+		# plot3dPose(jointsUnity, jointSpecUnity)
 
 		posTargetUnity = coordsToUnity(jointsWorld[0])
 		trackId = multiPose3DOut["track_id"]
 		sendCommand(1, np.array([trackId], dtype=np.int32).tobytes()) # spawn a character
 		sendCommand(2, np.array([trackId], dtype=np.int32).tobytes() + posTargetUnity.astype(np.float32).tobytes())
-		# plt.imshow(frame)
-		# plt.scatter(princpt[0], princpt[1])
-		# plt.scatter(*(projectedJointCam[:, :2] + np.array([640, 360])[np.newaxis, :]).transpose(1, 0))
+
+		list(boneAngles.items())
+		anglesOrderedUnity = np.zeros((13, 4))
+		anglesOrderedUnity[:, :] = quatToUnity([1, 0, 0, 0])
+		anglesOrderedUnity = np.array([quatToUnity(item[1]) for item in boneAngles.items()])
+		# anglesOrderedUnity[[5,6,7,8], :] = quatToUnity([1, 0, 0, 0])
+		# anglesOrderedUnity[9] = quatToUnity(list(boneAngles.items())[10][1])
+		# anglesOrderedUnity[9] = quatToUnity(quaternion.as_float_array(quaternion.from_rotation_vector([0,0,np.pi/4])))
+		# visualizeQuat(list(boneAngles.items())[9][1])
+		# anglesOrderedUnity[:, :] = quatToUnity(quaternion.as_float_array(quaternion.from_rotation_vector([np.pi/2, 0, 0])))
+		# anglesOrderedUnity[:, :] = quatToUnity(quaternion.as_float_array(quaternion.from_rotation_vector([0,np.pi/2, 0])))
+		# anglesOrderedUnity[:, :] = quatToUnity(quaternion.as_float_array(quaternion.from_rotation_vector([0,0,np.pi/2])))
+		# quaternion.as_float_array(quaternion.from_rotation_vector([0,np.pi/2, 0]))
+		# quaternion.as_float_array(quaternion.from_rotation_vector([np.pi/2, 0, 0]))
+		# quaternion.as_float_array(quaternion.from_rotation_vector([0,0,np.pi/2]))
+		sendCommand(5, np.array([trackId], dtype=np.int32).tobytes() +anglesOrderedUnity.astype(np.float32).tobytes())
 
 	# In Unity: set image to fill back of camera (with correct aspect ratio, with height filling full height of screen). Then set vertical FOV to this calc fov.
 	cameraVerticalFovDeg = 2 * np.arctan((0.5*frame.shape[0]) / cfg.focal[1]) * (180/np.pi)
+	multiPose3DOut["smpl_pose"].reshape(-1, 3)
 
 	#Format: dim 1 is up-down and is reversed (bigger is lower).
 	# allJoints = np.stack(allJointsList).reshape(-1, 3)

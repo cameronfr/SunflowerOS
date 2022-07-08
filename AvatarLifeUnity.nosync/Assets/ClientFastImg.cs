@@ -106,18 +106,16 @@ public class ClientFastImg : MonoBehaviour {
     // string[] joints = new string[] {"Armature/Hips/Right leg", "Armature/Hips/Left leg"};
     bonesList = new List<HumanBodyBones>() {
       HumanBodyBones.Hips,
-      HumanBodyBones.RightUpperLeg,
-      HumanBodyBones.RightLowerLeg,
       HumanBodyBones.LeftUpperLeg,
       HumanBodyBones.LeftLowerLeg,
+      HumanBodyBones.RightUpperLeg,
+      HumanBodyBones.RightLowerLeg,
       HumanBodyBones.Spine,
       HumanBodyBones.Chest,
       HumanBodyBones.Neck,
       HumanBodyBones.Head,
-      HumanBodyBones.LeftShoulder,
       HumanBodyBones.LeftUpperArm,
       HumanBodyBones.LeftLowerArm,
-      HumanBodyBones.RightShoulder,
       HumanBodyBones.RightUpperArm,
       HumanBodyBones.RightLowerArm,
     };
@@ -139,8 +137,11 @@ public class ClientFastImg : MonoBehaviour {
         // |id-int32|
         GameObject characterRaw = Instantiate(avatar, new Vector3(1 * 2.0f, 0, 0), Quaternion.identity);
         Character character = characterRaw.AddComponent<Character>() as Character;
-        // Transform hips = character.transform.Find("Armature/Hips");
-        // hips.Rotate(0, 180, 0);
+
+        // Temp test
+        Transform hips = character.transform.Find("Armature/Hips");
+        hips.Rotate(0, 180, 0);
+
         // character.SaveTPoseRotations(joints);
         character.SaveTPoseRotations(bonesList);
         int key = BitConverter.ToInt32(data, 0);
