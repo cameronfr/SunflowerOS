@@ -368,7 +368,6 @@ def multiPose3D(frame, poses2D):
 		# cv2.imwrite(file_name[:-4] + '_2dpose.jpg', input)
 
 
-
 # ------------------------------ Load Video ------------------------------
 
 
@@ -415,6 +414,15 @@ for idx, pair in enumerate(jointSpecUnity["skeleton"]):
 	print(jointSpecUnity["unityNames"][pair[0]], jointSpecUnity["unityNames"][pair[1]])
 	print(jointSpecUnity["tpose"][idx])
 
+# Transform from x, y-down, z-forwards to unity (x, y-up, z-forwards). Expects last dim to be size-3
+def coordsToUnity(arr):
+	assert arr.shape[-1] == 3
+	newArr = np.zeros(arr.shape)
+	newArr[..., 0] = arr[..., 0]
+	newArr[..., 1] = -arr[..., 1]
+	newArr[..., 2] = arr[..., 2]
+	return newArr
+
 # ------------------------------ RUN PROCESS ------------------------------
 
 lastPose2dOutWithTrackId = []
@@ -447,31 +455,39 @@ for frameIdx in range(60,61, 10):
 	plt.imshow(vis)
 
 	allJointsList = []
-	for multiPose3DOut in multiPose3DOuts[:2]:
+	for multiPose3DOut in multiPose3DOuts[:]:
 		bbox = multiPose3DOut['bbox'][0].cpu().numpy()
 		princpt = (bbox[0] + bbox[2] / 2, bbox[1] + bbox[3] / 2)
-		# Put coords into shared space. Want (0,0) optical center. Assuming this is author's intended space (i.e. not changing z), are there are many possible inverse projections if alter z?
-		# U_1 = (f_x * x + c_x * z) / z
-		# V_1 = (f_y * y + c_y * z) / z
+		# Coords for this person are rendered using. Where c_x_i and c_y_i change per person
+		# U_1 = (f_x_1 * x + c_x_i * z) / z
+		# V_1 = (f_y_1 * y + c_y_i * z) / z
+		# Want to adjust coords so that we get the same render result with fixed camera with (640, 360) optical center. Assuming this is author's intended space (i.e. not changing z), are there are many possible inverse projections if alter z?
+		# U_2 = (f_x * x' + (img_width/2) * z') / z'
+		# V_2 = (f_y * y' + (img_height/2) * z') / z'
 		# Then, to get same U_1 and U_2 when c_x and c_y are 0,
-		# X' = x + (c_x * z) / f_x
-		# Y' = y + (c_y * z) / f_y
+		# (f_x_1 * x + c_x_i * z) / z = (f_x * x' + img_height/2 * z') / z' => f_x_1 * x + c_x_i * z = f_x * x' + (img_width/2) * z => x' = (f_x_1 * x + c_x_i * z - z*(img_width/2)) / f_x => x' = (f_x *x + z * (c_x_i - img_width/2)) / f_x = x + (z * (c_x_i - img_width/2)) / f_x
+		# And similarly y' = y + (z * (c_y_i - img_width/2)) / f_y
+		# z' = z, f_x = f_x_1, f_y = f_y_1
+		# So now, if multiply focal length 5000 camera matrix, will get correct projection to ([-640, 640], [-360, 360])
+		# Next, need to adjust coordinates so that they project in centered way
 		cameraIntrinsics = np.array([ [cfg.focal[0], 0, 0], [0, cfg.focal[1], 0], [0,0,1]])
 		jointsWorld = multiPose3DOut["joint_cam"].squeeze().cpu().numpy().copy()
-		jointsWorld[:, 0] = jointsWorld[:, 0] + ((princpt[0] * jointsWorld[:, 2])/cfg.focal[0])
-		jointsWorld[:, 1] = jointsWorld[:, 1] + ((princpt[1] * jointsWorld[:, 2])/cfg.focal[1])
+		jointsWorld[:, 0] = jointsWorld[:, 0] + (((princpt[0] - frame.shape[1]/2) * jointsWorld[:, 2])/cfg.focal[0])
+		jointsWorld[:, 1] = jointsWorld[:, 1] + (((princpt[1] - frame.shape[0]/2) * jointsWorld[:, 2])/cfg.focal[1])
 		pos = cameraIntrinsics @ jointsWorld.T
 		projectedJointCam = pos.T / pos.T[:, 2, np.newaxis]
 		allJointsList.append(jointsWorld)
 
-		plt.scatter(princpt[0], princpt[1])
-		plt.scatter(*projectedJointCam[:, :2].transpose(1,0))
-	plt.imshow(frame)
+		posTargetUnity = coordsToUnity(jointsWorld[0])
+		trackId = multiPose3DOut["track_id"]
+		sendCommand(1, np.array([trackId], dtype=np.int32).tobytes()) # spawn a character
+		sendCommand(2, np.array([trackId], dtype=np.int32).tobytes() + posTargetUnity.astype(np.float32).tobytes())
+		# plt.imshow(frame)
+		# plt.scatter(princpt[0], princpt[1])
+		# plt.scatter(*(projectedJointCam[:, :2] + np.array([640, 360])[np.newaxis, :]).transpose(1, 0))
 
-	sendCommand(1, np.array([0], dtype=np.int32).tobytes()) # spawn a character
-	posTarget = allJointsList[0][0]
-	# sendCommand(2, np.array([0], dtype=np.int32).tobytes() + posTarget.astype(np.float32).tobytes())
-	sendCommand(2, np.array([0], dtype=np.int32).tobytes() + np.array([0,0,0]).astype(np.float32).tobytes())
+	# In Unity: set image to fill back of camera (with correct aspect ratio, with height filling full height of screen). Then set vertical FOV to this calc fov.
+	cameraVerticalFovDeg = 2 * np.arctan((0.5*frame.shape[0]) / cfg.focal[1]) * (180/np.pi)
 
 	#Format: dim 1 is up-down and is reversed (bigger is lower).
 	# allJoints = np.stack(allJointsList).reshape(-1, 3)
