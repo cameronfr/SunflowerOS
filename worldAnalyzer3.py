@@ -274,7 +274,7 @@ model.eval()
 transform = transforms.ToTensor()
 
 # for frameIdx, frame in tqdm.tqdm(enumerate(frames[:])):
-def multiPose3D(frame, poses2D):
+def multiPose3D(frame, poses2D, doVis=False):
 	# img_name = f"""frame{frameIdx}.jpg"""
 	# img_path = img_name
 	# coco_joint_list = [pose["keypoints"].tolist() for pose in posesByFrame[frameIdx]]
@@ -363,8 +363,9 @@ def multiPose3D(frame, poses2D):
 		# original_img = vis_bbox(original_img, bbox, alpha=1)  # for debug
 
 		# generate random color
-		color = colorsys.hsv_to_rgb(np.random.rand(), 0.5, 1.0)
-		original_img = render_mesh(original_img, mesh_cam_render, face, {'focal': cfg.focal, 'princpt': princpt}, color=color)
+		if doVis:
+			color = colorsys.hsv_to_rgb(np.random.rand(), 0.5, 1.0)
+			original_img = render_mesh(original_img, mesh_cam_render, face, {'focal': cfg.focal, 'princpt': princpt}, color=color)
 		# plt.imshow(original_img[:, :, ::-1])
 		# plt.show()
 
@@ -395,7 +396,6 @@ for idx, frame in enumerate(videoRaw.decode(videoRaw.streams[0])):
 	videoArray[idx] = np.array(frame.to_image())
 actualFramecount = int(videoStream.base_rate * videoStream.duration * videoStream.time_base)
 videoArray = videoArray[:actualFramecount]
-
 # frames = np.array(Image.open("/home/cameron/Crowdnet3D/demo/input/images/100023.jpg"))[np.newaxis, ...]
 frames = videoArray[:]#[0:100]
 
@@ -470,30 +470,38 @@ lastPose2dOutWithTrackId = []
 nextTrackId = 0 # Same track ID in a detection <-> same person. nextTrackId increases each time new person detected.
 # for frameIdx in range(len(frames)):
 avatarWithIdExists = {}
+# redlightgreenLight:
 # frame 600 -- doll scene, 3 people
 # frame 1000 -- running scene w/ close up of individual and ppl in background
-for frameIdx in range(1000,1001, 10):
+for frameIdx in range(1000,2000, 2):
 	# frameIdx = 61
 	frame = frames[frameIdx]
-	sendCommand(0, cv2.flip(frame, 0).ravel().tobytes())
+	# sendCommand(0, cv2.flip(frame, 0).ravel().tobytes())
+	sendCommand(0, cv2.flip(frame[::4, ::4, :], 0).ravel().tobytes())
 
+	# Detect Object Boxes in 2D with Yolo-x. 40.9ms
+	# %%timeit
 	detection2D = detector2D([frame])[0]
 	targetVisClass = 0
 	# mmdet.apis.show_result_pyplot(detectorModule, frame[:, :, ::-1], detection2D, score_thr=0.5)
-	vis = detectorModule.show_result(frame, detection2D, score_thr=0.4)
+	# vis = detectorModule.show_result(frame, detection2D, score_thr=0.4)
 	# plt.imshow(vis)
 
-	# len(list(filter(lambda x: x[4] > 0.4, detection2D[0].tolist())))
+	# Detect poses in people boxes. 373ms
+	# %%timeit
+	# global lastPose2dOutWithTrackId, nextTrackId
 	pose2dOutWithTrackId, nextTrackId = pose2D(frame, detection2D, lastPose2dOutWithTrackId, nextTrackId, score_thr=0.4)
 	lastPose2dOutWithTrackId = pose2dOutWithTrackId
-
-	vis = mmpose.apis.vis_pose_tracking_result(poseModel, frame, pose2dOutWithTrackId, kpt_score_thr=0.3, radius=4, thickness=2)
+	# vis = mmpose.apis.vis_pose_tracking_result(poseModel, frame, pose2dOutWithTrackId, kpt_score_thr=0.3, radius=4, thickness=2)
 	# plt.imshow(vis)
 
-	multiPose3DOuts, vis = multiPose3D(frame, pose2dOutWithTrackId)
+	# Extract 3d poses. 8 seconds for 17 people.
+	# %%prun -T multiPoseprofile
+	# %%timeit
+	multiPose3DOuts, vis = multiPose3D(frame, pose2dOutWithTrackId, doVis=False)
 	for i in range(len(pose2dOutWithTrackId)):
 		multiPose3DOuts[i]["track_id"] = pose2dOutWithTrackId[i]["track_id"]
-	plt.imshow(vis)
+	# plt.imshow(vis)
 
 	existingAvatarIds = set(avatarWithIdExists.keys())
 	idsInScene = []

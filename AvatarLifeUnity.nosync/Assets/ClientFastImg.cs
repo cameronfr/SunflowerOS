@@ -99,7 +99,8 @@ public class ClientFastImg : MonoBehaviour {
   public void Start() {
     allCharacters = new Dictionary<int, Character>();
 
-    tex = new Texture2D(1280, 720, TextureFormat.RGB24, mipChain: false);
+    // tex = new Texture2D(1280, 720, TextureFormat.RGB24, mipChain: false);
+    tex = new Texture2D(1280/4, 720/4, TextureFormat.RGB24, mipChain: false);
     // tex = new Texture2D(960, 540, TextureFormat.RGB24, mipChain: false);
     image.texture = tex;
 
