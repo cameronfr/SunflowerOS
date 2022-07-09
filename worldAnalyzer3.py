@@ -413,20 +413,26 @@ def sendCommand(id, data):
 	message = np.array([id], dtype=np.uint8).tobytes() + data
 	socket.send(message)
 
+def printJointSpec(jointSpec):
+	for idx, pair in enumerate(jointSpec["skeleton"]):
+		print(jointSpec["names"][pair[0]], jointSpec["names"][pair[1]])
+		if jointSpec["tpose"]:
+			print(jointSpec["tpose"][idx])
 
 # Coordinate space: y (2nd coord) is down (increasing is down), z away from camera. T-pose facing towards camera.
 jointSpecCrowdnet = {"names": None, "skeleton": None, "tpose": None}
 jointSpecCrowdnet["names"] = ['Pelvis', 'L_Hip', 'R_Hip', 'Torso', 'L_Knee', 'R_Knee', 'Spine', 'L_Ankle', 'R_Ankle', 'Chest', 'L_Toe', 'R_Toe', 'Neck', 'L_Thorax', 'R_Thorax', 'Head', 'L_Shoulder', 'R_Shoulder', 'L_Elbow', 'R_Elbow', 'L_Wrist', 'R_Wrist', 'L_Hand', 'R_Hand', 'Nose', 'L_Eye', 'R_Eye', 'L_Ear', 'R_Ear', 'Head_Top']
 jointSpecCrowdnet["skeleton"] = [(0, 1), (1, 4), (4, 7), (7, 10), (0, 2), (2, 5), (5, 8), (8, 11), (0, 3), (3, 6), (6, 9), (9, 14), (14, 17), (17, 19), (19, 21), (21, 23), (9, 13), (13, 16), (16, 18), (18, 20), (20, 22), (9, 12), (12, 24), (24, 15), (24, 25), (24, 26), (25, 27), (26, 28), (24, 29)]
 
+jointSpecSMPL = {"names": None, "skeleton": None, "tpose": None}
+jointSpecSMPL["names"] = jointSpecCrowdnet["names"][:24]
+jointSpecSMPL["skeleton"] = jointSpecCrowdnet["skeleton"][:22] + [(12, 15)]
+
 jointSpecUnity = {"names": None, "skeleton": None, "tpose": None, "unityNames": None}
 jointSpecUnity["names"] = ['Pelvis',  'L_Hip', 'L_Knee', 'L_Ankle', 'R_Hip', 'R_Knee', 'R_Ankle', 'Spine', 'Chest', 'Neck', 'Head', 'L_Eye', 'R_Eye', 'L_Shoulder', 'L_Elbow', 'L_Wrist', 'R_Shoulder', 'R_Elbow', 'R_Wrist']
 jointSpecUnity["unityNames"] = ["Hips", "LeftUpperLeg", "LeftLowerLeg", "LeftFoot", "RightUpperLeg", "RightLowerLeg", "RightFoot", "Spine", "Chest", "Neck", "Head", "LeftEye", "RightEye", "LeftUpperArm", "LeftLowerArm", "LeftHand", "RightUpperArm", "RightLowerArm", "RightHand"] # HumanBodyBones names
 jointSpecUnity["skeleton"] = [(0, 1), (1,2), (2,3), (0,4), (4,5), (5,6), (0, 7), (7,8), (8,9), (9,10), (10, 11), (10, 12), (8, 13), (13,14), (14,15), (8,16), (16,17), (17,18)]
-jointSpecUnity["tpose"] = [[1, 0, 0], [0, 1, 0], [0, 1, 0], [-1, 0, 0], [0, 1, 0], [0, 1, 0], [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, -1, 0], [1, -1, 0], [1, 0, 0], [1, 0, 0], [-1, -1, 0], [-1, 0, 0], [-1, 0, 0]]
-for idx, pair in enumerate(jointSpecUnity["skeleton"]):
-	print(jointSpecUnity["unityNames"][pair[0]], jointSpecUnity["unityNames"][pair[1]])
-	print(jointSpecUnity["tpose"][idx])
+jointSpecUnity["tpose"] = [[1, 0, 0], [0, 1, 0], [0, 1, 0], [-1, 0, 0], [0, 1, 0], [0, 1, 0], [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, -1, -1], [0, -1, -1], [0, -1, -1], [1, -1, 0], [1, 0, 0], [1, 0, 0], [-1, -1, 0], [-1, 0, 0], [-1, 0, 0]]
 
 # Transform from x, y-down, z-forwards to unity (x, y-up, z-forwards). Expects last dim to be size-3
 def coordsToUnity(arr):
@@ -463,7 +469,10 @@ from collections import OrderedDict
 lastPose2dOutWithTrackId = []
 nextTrackId = 0 # Same track ID in a detection <-> same person. nextTrackId increases each time new person detected.
 # for frameIdx in range(len(frames)):
-for frameIdx in range(600,601, 10):
+avatarWithIdExists = {}
+# frame 600 -- doll scene, 3 people
+# frame 1000 -- running scene w/ close up of individual and ppl in background
+for frameIdx in range(1000,1001, 10):
 	# frameIdx = 61
 	frame = frames[frameIdx]
 	sendCommand(0, cv2.flip(frame, 0).ravel().tobytes())
@@ -472,22 +481,29 @@ for frameIdx in range(600,601, 10):
 	targetVisClass = 0
 	# mmdet.apis.show_result_pyplot(detectorModule, frame[:, :, ::-1], detection2D, score_thr=0.5)
 	vis = detectorModule.show_result(frame, detection2D, score_thr=0.4)
-	plt.figure(figsize = (15,15))
-	plt.imshow(vis)
+	# plt.imshow(vis)
 
 	# len(list(filter(lambda x: x[4] > 0.4, detection2D[0].tolist())))
 	pose2dOutWithTrackId, nextTrackId = pose2D(frame, detection2D, lastPose2dOutWithTrackId, nextTrackId, score_thr=0.4)
 	lastPose2dOutWithTrackId = pose2dOutWithTrackId
 
 	vis = mmpose.apis.vis_pose_tracking_result(poseModel, frame, pose2dOutWithTrackId, kpt_score_thr=0.3, radius=4, thickness=2)
-	plt.figure(figsize = (15,15))
-	plt.imshow(vis)
+	# plt.imshow(vis)
 
 	multiPose3DOuts, vis = multiPose3D(frame, pose2dOutWithTrackId)
 	for i in range(len(pose2dOutWithTrackId)):
 		multiPose3DOuts[i]["track_id"] = pose2dOutWithTrackId[i]["track_id"]
-	plt.figure(figsize=(15, 15))
 	plt.imshow(vis)
+
+	existingAvatarIds = set(avatarWithIdExists.keys())
+	idsInScene = []
+	for multiPose3DOut in multiPose3DOuts[:]:
+		idsInScene.append(multiPose3DOut["track_id"])
+	idsToDespawn = existingAvatarIds.difference(idsInScene)
+	for id in idsToDespawn:
+		# print("Sending delete", id, avatarWithIdExists, idsInScene, idsToDespawn)
+		sendCommand(3, np.array([id], dtype=np.int32).tobytes())
+		del avatarWithIdExists[id]
 
 	allJointsList = []
 	for multiPose3DOut in multiPose3DOuts[:]:
@@ -524,7 +540,7 @@ for frameIdx in range(600,601, 10):
 		jointsDefSrc = jointSpecCrowdnet
 		jointsDefDest = jointSpecUnity
 		jointPositions = jointsWorld
-		def sampleOtherJoints(jointPositions, jointsDefSrc, jointsDefDest):
+		def sampleOtherJointPositions(jointPositions, jointsDefSrc, jointsDefDest):
 			# Assumes joint-axis is -2
 			newShape = jointPositions.shape[:-2] + (len(jointsDefDest["names"]),) + (jointPositions.shape[-1],)
 			output = np.zeros(newShape)
@@ -535,8 +551,9 @@ for frameIdx in range(600,601, 10):
 				# print(idx, jointIndexSrc)
 				output[idx] = jointPositions[jointIndexSrc]
 			return output
+
 		# plot3dPose(jointsWorld, jointSpecCrowdnet)
-		jointsUnity = sampleOtherJoints(jointsWorld, jointSpecCrowdnet, jointSpecUnity)
+		jointsUnity = sampleOtherJointPositions(jointsWorld, jointSpecCrowdnet, jointSpecUnity)
 		# plot3dPose(sampleOtherJoints(jointsWorld, jointSpecCrowdnet, jointSpecUnity), jointSpecUnity)
 
 		def getPoseQuat(sourceVec, tPoseDir):
@@ -548,25 +565,39 @@ for frameIdx in range(600,601, 10):
 			quat[0]= (np.linalg.norm(vec1)* np.linalg.norm(vec2)) + np.dot(vec1, vec2)
 			quat = quat / np.linalg.norm(quat)
 			return quat
-		def getBoneAngles(jointPositions, jointSpec):
+		def getBoneAnglesFromJointPositions(jointPositions, jointSpec):
 			# Need better method. Things: 1. when bone is parent of multiple bones, (i.e. chest and hip), its rotation is defined by its multiple children. Here we're using the last-set one for chest, and the manually computed one for root/Pelvis.
 			# 2. Offset-from-skeleton method might twist bone that's not actually twisted, if t-pose-skeleton-vec and joint-vec are aligned already.
 			# jointPositions = jointsUnity
 			# jointSpec = jointSpecUnity
 
+			def quatFromNewBasis(v1, v2, v3):
+				basisChange = np.empty((3, 3))
+				basisChange[:, 0] = v1/np.linalg.norm(v1)
+				basisChange[:, 1] = v2/np.linalg.norm(v2)
+				basisChange[:, 2] = v3/np.linalg.norm(v3)
+				rotation = quaternion.from_rotation_matrix(basisChange, nonorthogonal=True)
+				quat = quaternion.as_float_array(rotation)
+				return quat
+
 			# Get Rotation of Root Joint. Be careful w/ basis change otherwise might have root joint 180deg which messes with current fragile tpose->angle process.
-			hipVec =  (joints[jointSpecUnity["names"].index("L_Hip")] - joints[jointSpecUnity["names"].index("Pelvis")])
-			spineVec = (joints[jointSpecUnity["names"].index("Spine")] - joints[jointSpecUnity["names"].index("Pelvis")])
+			hipVec =  (jointPositions[jointSpecUnity["names"].index("L_Hip")] - jointPositions[jointSpecUnity["names"].index("R_Hip")])
+			spineVec = (jointPositions[jointSpecUnity["names"].index("Spine")] - jointPositions[jointSpecUnity["names"].index("Pelvis")])
 			bodyCross = np.cross(spineVec, hipVec)
-			basisChange = np.empty((3, 3))
-			# basisChange[:, 0] = hipVec/np.linalg.norm(hipVec)
-			# basisChange[:, 1] = bodyCross/np.linalg.norm(bodyCross)
-			# basisChange[:, 2] = spineVec/np.linalg.norm(spineVec)
-			basisChange[:, 0] = hipVec/np.linalg.norm(hipVec)
-			basisChange[:, 1] = -spineVec/np.linalg.norm(spineVec)
-			basisChange[:, 2] = bodyCross/np.linalg.norm(bodyCross)
-			rootRotation = quaternion.from_rotation_matrix(basisChange, nonorthogonal=True)
-			rootQuat = quaternion.as_float_array(rootRotation)
+			rootQuat = quatFromNewBasis(hipVec, -spineVec, bodyCross)
+
+			acrossChestVec = (jointPositions[jointSpecUnity["names"].index("L_Shoulder")] - jointPositions[jointSpecUnity["names"].index("R_Shoulder")])
+			neckVec = (jointPositions[jointSpecUnity["names"].index("Neck")] - jointPositions[jointSpecUnity["names"].index("Chest")])
+			chestCross = np.cross(neckVec, acrossChestVec)
+			chestQuat = quatFromNewBasis(acrossChestVec, -neckVec, chestCross)
+
+			# Should take into account t-pose (this code implicitly assumes eyes are directly above head. use hack for now)
+			acrossEyesVec = (jointPositions[jointSpecUnity["names"].index("L_Eye")] - jointPositions[jointSpecUnity["names"].index("R_Eye")])
+			downFaceVec = ((jointPositions[jointSpecUnity["names"].index("L_Eye")] + jointPositions[jointSpecUnity["names"].index("R_Eye")])/2) - jointPositions[jointSpecUnity["names"].index("Head")]
+			faceCross = np.cross(downFaceVec, acrossEyesVec)
+			tiltHeadUp = quaternion.from_rotation_vector(-0.25*np.pi*(acrossEyesVec/np.linalg.norm(acrossEyesVec))) # tilt 45 degrees up
+			headQuat = tiltHeadUp * np.quaternion(*quatFromNewBasis(acrossEyesVec, -downFaceVec, faceCross))
+			headQuat = quaternion.as_float_array(headQuat)
 
 			boneAngles = OrderedDict()
 			testSkeleton = np.zeros(jointPositions.shape)
@@ -582,42 +613,85 @@ for frameIdx in range(600,601, 10):
 				fullRotation = np.quaternion(*rotation.tolist()) * np.quaternion(*rootQuat.tolist())
 				boneAngles[jointSpec["names"][pair[0]]] = quaternion.as_float_array(fullRotation)
 
-				# Test skeleton stuff
+				# Test skeleton stuff. Note this is not how pose actually works -- e.g. Pelvis-> its three children only has one rotation, not three
 				# rotatedSkeleVec = tposeVec
 				rotatedSkeleVec = quaternion.rotate_vectors([fullRotation], tposeVec)[0]
 				# print(jointSpec["names"][pair[0]], jointSpec["names"][pair[1]], jointSpec["tpose"][])
 				testSkeleton[pair[1]] = testSkeleton[pair[0]] + rotatedSkeleVec
+			# Overwrite bone angles where there's more than one child
 			boneAngles["Pelvis"] = rootQuat
+			boneAngles["Chest"] = chestQuat
+			boneAngles["Head"] = headQuat
 			# visualizeQuat(rootQuat)
 			# plot3dPose(jointPositions, jointSpec)
 			# plot3dPose(testSkeleton, jointSpec)
 			return boneAngles
+		def getBoneAnglesFromSMPLPose(boneAnglesRel, jointSpec):
+			# Weirdness for this SMPL pose from Crowdnet3D.
+			# 1: quat rotation order is reversed, so that most-local rotation is applied first, then rotations down chain to root are applied (actually, I think is this the standard & unity is doing this too -- local applied "first", local on the rhs?)
+			# 2: need to transform quat afterwards
+
+			boneAnglesGlobal = np.zeros(boneAnglesRel.shape[:-1] + (4,))
+			# jointSpec["skeleton"] must have correct traversal order, starting at hip
+			boneAnglesGlobal[jointSpec["names"].index("Pelvis")] = quaternion.as_float_array(quaternion.from_rotation_vector(boneAnglesRel[jointSpec["names"].index("Pelvis")]))
+
+			for pair in jointSpec["skeleton"]:
+				# print(jointSpec["names"][pair[0]], jointSpec["names"][pair[1]])
+				localRotationQuat = quaternion.from_rotation_vector(boneAnglesRel[pair[1]])
+				globalRotation = np.quaternion(*boneAnglesGlobal[pair[0]]) * localRotationQuat
+				boneAnglesGlobal[pair[1]] = quaternion.as_float_array(globalRotation)
+
+			boneAngles = OrderedDict()
+			for idx, boneName in enumerate(jointSpec["names"]):
+				rootRot = quaternion.from_rotation_vector(boneAnglesRel[jointSpec["names"].index("Pelvis")])
+				boneAngles[boneName] = quaternion.as_float_array(rootRot * np.quaternion(*boneAnglesGlobal[idx]))
+
+				# 2. Extra transforms to get to our desired space, even though mesh_cam_render doesn't seem to need these transforms
+				def transformQuat(q):
+					qQuat = np.quaternion(*q)
+					qQuat = quaternion.from_rotation_vector([-np.pi, 0, 0]) * qQuat
+					q = quaternion.as_float_array(qQuat)
+					q = np.array([q[0], -q[1], q[2], -q[3]]) # y mirror
+					q = np.array([q[0], -q[1], -q[2], q[3]]) # z mirror
+					return q
+				boneAngles[boneName] = transformQuat(boneAnglesGlobal[idx])
+				# boneAnglesUnitySubset[k] = transformQuat(quaternion.as_float_array(rotatedQuat))
+				# boneAngles[boneName] = quaternion.as_float_array( np.quaternion(*boneAnglesGlobal[idx]))
+			return boneAngles
+
 		def visualizeQuat(quat):
 			plot3dPose(jointsWorld, jointSpecCrowdnet)
 			rotatedJoints = quaternion.rotate_vectors(np.quaternion(*quat), jointsWorld)
 			plot3dPose(rotatedJoints, jointSpecCrowdnet)
-		boneAngles = getBoneAngles(jointsUnity, jointSpecUnity)
+
+		# Should be using full Unity set instead of UnitySubset. UnitySubset only has rotations of parent bones in skeleton.
+		# Bone Angle Calc Method 1
+		# boneAnglesUnitySubset = getBoneAnglesFromJointPositions(jointsUnity, jointSpecUnity)
+		# Don't send Head (i.e. head->eyes) joint angle since don't calc it correctly yet
+		# boneAnglesUnitySubset["Head"] = [1, 0, 0, 0]
+		# anglesOrderedUnity[[8], :] = quatToUnity([1, 0, 0, 0])
+		# list(boneAnglesUnitySubset.items())
+
+		# Bone Angle Calc Method 2
+		boneAnglesSMPL = getBoneAnglesFromSMPLPose(multiPose3DOut["smpl_pose"].reshape(-1, 3).cpu(), jointSpecSMPL)
+		boneAnglesUnitySubset = OrderedDict((k, boneAnglesSMPL[k]) for k in jointSpecUnity["names"] if k not in ["L_Eye", "R_Eye", "L_Wrist", "R_Wrist", "L_Ankle", "R_Ankle"])
+		# list(boneAnglesUnitySubset.items())
+
 		# plot3dPose(jointsUnity, jointSpecUnity)
 
 		posTargetUnity = coordsToUnity(jointsWorld[0])
 		trackId = multiPose3DOut["track_id"]
-		sendCommand(1, np.array([trackId], dtype=np.int32).tobytes()) # spawn a character
+		if trackId not in avatarWithIdExists:
+			sendCommand(1, np.array([trackId], dtype=np.int32).tobytes()) # spawn a character
+			avatarWithIdExists[trackId] = True
+		# Position character
 		sendCommand(2, np.array([trackId], dtype=np.int32).tobytes() + posTargetUnity.astype(np.float32).tobytes())
 
-		list(boneAngles.items())
+		# list(boneAngles.items())
 		anglesOrderedUnity = np.zeros((13, 4))
 		anglesOrderedUnity[:, :] = quatToUnity([1, 0, 0, 0])
-		anglesOrderedUnity = np.array([quatToUnity(item[1]) for item in boneAngles.items()])
-		# anglesOrderedUnity[[5,6,7,8], :] = quatToUnity([1, 0, 0, 0])
-		# anglesOrderedUnity[9] = quatToUnity(list(boneAngles.items())[10][1])
-		# anglesOrderedUnity[9] = quatToUnity(quaternion.as_float_array(quaternion.from_rotation_vector([0,0,np.pi/4])))
-		# visualizeQuat(list(boneAngles.items())[9][1])
-		# anglesOrderedUnity[:, :] = quatToUnity(quaternion.as_float_array(quaternion.from_rotation_vector([np.pi/2, 0, 0])))
-		# anglesOrderedUnity[:, :] = quatToUnity(quaternion.as_float_array(quaternion.from_rotation_vector([0,np.pi/2, 0])))
-		# anglesOrderedUnity[:, :] = quatToUnity(quaternion.as_float_array(quaternion.from_rotation_vector([0,0,np.pi/2])))
-		# quaternion.as_float_array(quaternion.from_rotation_vector([0,np.pi/2, 0]))
-		# quaternion.as_float_array(quaternion.from_rotation_vector([np.pi/2, 0, 0]))
-		# quaternion.as_float_array(quaternion.from_rotation_vector([0,0,np.pi/2]))
+		anglesOrderedUnity = np.array([quatToUnity(item[1]) for item in boneAnglesUnitySubset.items()])
+		# list(boneAngles.items())[6]
 		sendCommand(5, np.array([trackId], dtype=np.int32).tobytes() +anglesOrderedUnity.astype(np.float32).tobytes())
 
 	# In Unity: set image to fill back of camera (with correct aspect ratio, with height filling full height of screen). Then set vertical FOV to this calc fov.

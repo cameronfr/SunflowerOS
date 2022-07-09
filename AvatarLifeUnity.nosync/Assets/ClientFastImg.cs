@@ -139,8 +139,8 @@ public class ClientFastImg : MonoBehaviour {
         Character character = characterRaw.AddComponent<Character>() as Character;
 
         // Temp test
-        Transform hips = character.transform.Find("Armature/Hips");
-        hips.Rotate(0, 180, 0);
+        // Transform hips = character.transform.Find("Armature/Hips");
+        // hips.Rotate(0, 180, 0);
 
         // character.SaveTPoseRotations(joints);
         character.SaveTPoseRotations(bonesList);
@@ -163,8 +163,9 @@ public class ClientFastImg : MonoBehaviour {
       } else if (cmd == 3) {
         // Cmd: despawn avatar with id
         int key = BitConverter.ToInt32(ArraySlice(data, 0, 4), 0);
+        print("Deleting character " + key);
         Character character = allCharacters[key];
-        UnityEngine.Object.Destroy(character);
+        UnityEngine.Object.Destroy(character.gameObject);
         allCharacters.Remove(key);
       } else if (cmd == 4) {
         // Cmd: set avatar scale by setting a specific femur length
