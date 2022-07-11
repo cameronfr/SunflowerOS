@@ -357,9 +357,9 @@ def multiPose3D(frame, poses2D, doVis=False):
 		allOuts.append(out)
 
 		# draw output mesh
-		mesh_cam_render = out['mesh_cam_render'][0].cpu().numpy()
-		bbox = out['bbox'][0].cpu().numpy()
-		princpt = (bbox[0] + bbox[2] / 2, bbox[1] + bbox[3] / 2)
+		# mesh_cam_render = out['mesh_cam_render'][0].cpu().numpy()
+		# bbox = out['bbox'][0].cpu().numpy()
+		# princpt = (bbox[0] + bbox[2] / 2, bbox[1] + bbox[3] / 2)
 		# original_img = vis_bbox(original_img, bbox, alpha=1)  # for debug
 
 		# generate random color
@@ -473,11 +473,11 @@ avatarWithIdExists = {}
 # redlightgreenLight:
 # frame 600 -- doll scene, 3 people
 # frame 1000 -- running scene w/ close up of individual and ppl in background
-for frameIdx in range(1000,2000, 2):
+for frameIdx in range(1000,1001, 2):
 	# frameIdx = 61
 	frame = frames[frameIdx]
 	# sendCommand(0, cv2.flip(frame, 0).ravel().tobytes())
-	sendCommand(0, cv2.flip(frame[::4, ::4, :], 0).ravel().tobytes())
+	sendCommand(0, cv2.flip(frame[::2, ::2, :], 0).ravel().tobytes())
 
 	# Detect Object Boxes in 2D with Yolo-x. 40.9ms
 	# %%timeit
@@ -495,9 +495,9 @@ for frameIdx in range(1000,2000, 2):
 	# vis = mmpose.apis.vis_pose_tracking_result(poseModel, frame, pose2dOutWithTrackId, kpt_score_thr=0.3, radius=4, thickness=2)
 	# plt.imshow(vis)
 
-	# Extract 3d poses. 8 seconds for 17 people.
+	# Extract 3d poses. Previously: 8 seconds for 17 people (frame 1000). Now (with mesh regress calc & vis removed): 0.649ms for 17 people
 	# %%prun -T multiPoseprofile
-	# %%timeit
+	%%timeit
 	multiPose3DOuts, vis = multiPose3D(frame, pose2dOutWithTrackId, doVis=False)
 	for i in range(len(pose2dOutWithTrackId)):
 		multiPose3DOuts[i]["track_id"] = pose2dOutWithTrackId[i]["track_id"]
@@ -529,9 +529,9 @@ for frameIdx in range(1000,2000, 2):
 		# z' = z, f_x = f_x_1, f_y = f_y_1
 		# So now, if multiply focal length 5000 camera matrix, will get correct projection to ([-640, 640], [-360, 360])
 
-		jointsWorld = multiPose3DOut["joint_cam"].squeeze().cpu().numpy().copy()
-		jointsWorld[:, 0] = jointsWorld[:, 0] + (((princpt[0] - frame.shape[1]/2) * jointsWorld[:, 2])/cfg.focal[0])
-		jointsWorld[:, 1] = jointsWorld[:, 1] + (((princpt[1] - frame.shape[0]/2) * jointsWorld[:, 2])/cfg.focal[1])
+		# jointsWorld = multiPose3DOut["joint_cam"].squeeze().cpu().numpy().copy()
+		# jointsWorld[:, 0] = jointsWorld[:, 0] + (((princpt[0] - frame.shape[1]/2) * jointsWorld[:, 2])/cfg.focal[0])
+		# jointsWorld[:, 1] = jointsWorld[:, 1] + (((princpt[1] - frame.shape[0]/2) * jointsWorld[:, 2])/cfg.focal[1])
 
 		# Test the projection of the new global coordinates
 		# cameraIntrinsics = np.array([ [cfg.focal[0], 0, 0], [0, cfg.focal[1], 0], [0,0,1]])
@@ -545,10 +545,10 @@ for frameIdx in range(1000,2000, 2):
 		# Convert joint locations to unity joint locations
 		# Using unity join t-pose, calculate joint global rotation quaternions
 		# Send them over to Unity
-		jointsDefSrc = jointSpecCrowdnet
-		jointsDefDest = jointSpecUnity
-		jointPositions = jointsWorld
 		def sampleOtherJointPositions(jointPositions, jointsDefSrc, jointsDefDest):
+			# jointsDefSrc = jointSpecCrowdnet
+			# jointsDefDest = jointSpecUnity
+			# jointPositions = jointsWorld
 			# Assumes joint-axis is -2
 			newShape = jointPositions.shape[:-2] + (len(jointsDefDest["names"]),) + (jointPositions.shape[-1],)
 			output = np.zeros(newShape)
@@ -559,10 +559,6 @@ for frameIdx in range(1000,2000, 2):
 				# print(idx, jointIndexSrc)
 				output[idx] = jointPositions[jointIndexSrc]
 			return output
-
-		# plot3dPose(jointsWorld, jointSpecCrowdnet)
-		jointsUnity = sampleOtherJointPositions(jointsWorld, jointSpecCrowdnet, jointSpecUnity)
-		# plot3dPose(sampleOtherJoints(jointsWorld, jointSpecCrowdnet, jointSpecUnity), jointSpecUnity)
 
 		def getPoseQuat(sourceVec, tPoseDir):
 			quat = np.zeros(4)
@@ -674,6 +670,9 @@ for frameIdx in range(1000,2000, 2):
 
 		# Should be using full Unity set instead of UnitySubset. UnitySubset only has rotations of parent bones in skeleton.
 		# Bone Angle Calc Method 1
+		# plot3dPose(jointsWorld, jointSpecCrowdnet)
+		# jointsUnity = sampleOtherJointPositions(jointsWorld, jointSpecCrowdnet, jointSpecUnity)
+		# plot3dPose(sampleOtherJoints(jointsWorld, jointSpecCrowdnet, jointSpecUnity), jointSpecUnity)
 		# boneAnglesUnitySubset = getBoneAnglesFromJointPositions(jointsUnity, jointSpecUnity)
 		# Don't send Head (i.e. head->eyes) joint angle since don't calc it correctly yet
 		# boneAnglesUnitySubset["Head"] = [1, 0, 0, 0]
@@ -687,12 +686,17 @@ for frameIdx in range(1000,2000, 2):
 
 		# plot3dPose(jointsUnity, jointSpecUnity)
 
-		posTargetUnity = coordsToUnity(jointsWorld[0])
+		# Position character
+		posTarget = np.array([0,-0.1,0]) + multiPose3DOut["smpl_trans"].cpu().numpy()[0]
+		posTarget[0] = posTarget[0] + (((princpt[0] - frame.shape[1]/2) * posTarget[2])/cfg.focal[0])
+		posTarget[1] = posTarget[1] + (((princpt[1] - frame.shape[0]/2) * posTarget[2])/cfg.focal[1])
+		posTargetUnity = coordsToUnity(posTarget)
+
+		# posTargetUnity = coordsToUnity(jointsWorld[0])
 		trackId = multiPose3DOut["track_id"]
 		if trackId not in avatarWithIdExists:
 			sendCommand(1, np.array([trackId], dtype=np.int32).tobytes()) # spawn a character
 			avatarWithIdExists[trackId] = True
-		# Position character
 		sendCommand(2, np.array([trackId], dtype=np.int32).tobytes() + posTargetUnity.astype(np.float32).tobytes())
 
 		# list(boneAngles.items())
