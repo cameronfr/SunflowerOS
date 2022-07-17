@@ -161,7 +161,7 @@ def pose2D(frame, detections2D, lastPose2dOutWithTrackId, nextTrackId, score_thr
 	pose2dOut, _ = mmpose.apis.inference_top_down_pose_model(poseModel, frames[frameIdx][:, :, ::-1], person_results=peopleBboxes, bbox_thr=0.0, format="xyxy")
 
 	# pose2dOut is list of {"keypoints" ..., "bbox": ...}, and pose2dOutWithTrackId adds a "track id" to each dict.
-	pose2dOutWithTrackId, nextTrackId = mmpose.apis.get_track_id(pose2dOut, copy.deepcopy(lastPose2dOutWithTrackId), nextTrackId, use_oks=True, tracking_thr=0.3) # code deletes objs in last pose...
+	pose2dOutWithTrackId, nextTrackId = mmpose.apis.get_track_id(pose2dOut, copy.deepcopy(lastPose2dOutWithTrackId), nextTrackId, use_oks=True, tracking_thr=0.3, use_one_euro=True) # code deletes objs in last pose...
 	return (pose2dOutWithTrackId, nextTrackId)
 
 # posesByTrackId = {}
@@ -274,7 +274,7 @@ model.eval()
 transform = transforms.ToTensor()
 
 # for frameIdx, frame in tqdm.tqdm(enumerate(frames[:])):
-def multiPose3D(frame, poses2D, doVis=False):
+def multiPose3D(frame, poses2D, doVis=False, joint_filter_thresh=0.0):
 	# img_name = f"""frame{frameIdx}.jpg"""
 	# img_path = img_name
 	# coco_joint_list = [pose["keypoints"].tolist() for pose in posesByFrame[frameIdx]]
@@ -300,8 +300,8 @@ def multiPose3D(frame, poses2D, doVis=False):
 		coco_joint_valid = (coco_joint_img[:, 2].copy().reshape(-1, 1) > pose_thr).astype(np.float32)
 
 		# filter inaccurate inputs
-		det_score = sum(coco_joint_img[:, 2])
-		if det_score < 1.0:
+		det_score = np.mean(coco_joint_img[:, 2])
+		if det_score < joint_filter_thresh:
 			print("Filtered out by sum of joint probs")
 			continue
 		if len(coco_joint_img[:, 2:].nonzero()[0]) < 1:
@@ -387,7 +387,8 @@ def multiPose3D(frame, poses2D, doVis=False):
 
 
 # videoRaw = av.open("/home/cameron/shibuyaTrim1.mp4")
-videoRaw = av.open("/home/cameron/Crowdnet3D/squidGame.mp4")
+videoRaw = av.open("/home/cameron/shibuyaTrim2.mp4")
+# videoRaw = av.open("/home/cameron/Crowdnet3D/squidGame.mp4")
 # videoRaw.seek(3*10**6)
 videoStream = videoRaw.streams[0]
 videoFrames = videoRaw.decode(videoRaw.streams[0])
@@ -402,6 +403,7 @@ frames = videoArray[:]#[0:100]
 # ------------------------------ CONNECT TO RENDERER ------------------------------
 
 import zmq
+import time
 context = zmq.Context()
 socket = context.socket(zmq.PUSH)
 socket.bind('tcp://*:5558')
@@ -409,7 +411,21 @@ socket.bind('tcp://*:5558')
 # message = np.insert(img, 0, 0)
 # socket.send(message.tobytes())
 #
-def sendCommand(id, data):
+
+# Use this to precompute
+# commandsByFrame = OrderedDict()
+# def sendCommand(frameIdx, id, data):
+# 	if frameIdx not in commandsByFrame:
+# 		commandsByFrame[frameIdx] = []
+# 	message = np.array([id], dtype=np.uint8).tobytes() + data
+# 	commandsByFrame[frameIdx].append(message)
+# for frameIdx in commandsByFrame:
+# 	for message in commandsByFrame[frameIdx]:
+# 		if (message[0] != 0):
+# 			socket.send(message)
+
+# Use this for realtime in editor
+def sendCommand(frameIdx, id, data):
 	message = np.array([id], dtype=np.uint8).tobytes() + data
 	socket.send(message)
 
@@ -473,11 +489,11 @@ avatarWithIdExists = {}
 # redlightgreenLight:
 # frame 600 -- doll scene, 3 people
 # frame 1000 -- running scene w/ close up of individual and ppl in background
-for frameIdx in range(1000,1001, 2):
+for frameIdx in tqdm.tqdm(range(0,998,1)):
 	# frameIdx = 61
 	frame = frames[frameIdx]
-	# sendCommand(0, cv2.flip(frame, 0).ravel().tobytes())
-	sendCommand(0, cv2.flip(frame[::2, ::2, :], 0).ravel().tobytes())
+	# sendCommand(frameIdx,0, cv2.flip(frame[::2, ::2, :], 0).ravel().tobytes())
+	sendCommand(frameIdx,0, cv2.flip(frame[:, :, :], 0).ravel().tobytes())
 
 	# Detect Object Boxes in 2D with Yolo-x. 40.9ms
 	# %%timeit
@@ -490,16 +506,16 @@ for frameIdx in range(1000,1001, 2):
 	# Detect poses in people boxes. 373ms
 	# %%timeit
 	# global lastPose2dOutWithTrackId, nextTrackId
-	pose2dOutWithTrackId, nextTrackId = pose2D(frame, detection2D, lastPose2dOutWithTrackId, nextTrackId, score_thr=0.4)
+	pose2dOutWithTrackId, nextTrackId = pose2D(frame, detection2D, lastPose2dOutWithTrackId, nextTrackId, score_thr=0.5) #0.3
 	lastPose2dOutWithTrackId = pose2dOutWithTrackId
 	# vis = mmpose.apis.vis_pose_tracking_result(poseModel, frame, pose2dOutWithTrackId, kpt_score_thr=0.3, radius=4, thickness=2)
 	# plt.imshow(vis)
 
-	# Extract 3d poses. Previously: 8 seconds for 17 people (frame 1000). Now (with mesh regress calc & vis removed): 0.649ms for 17 people
+	# Extract 3d poses. Previously: 8 seconds for 17 people (frame 1000). Now (with mesh regress calc & vis removed): 0.649ms for 17 people. If add mesh regress back, takes 0.996s
 	# %%prun -T multiPoseprofile
-	%%timeit
-	multiPose3DOuts, vis = multiPose3D(frame, pose2dOutWithTrackId, doVis=False)
-	for i in range(len(pose2dOutWithTrackId)):
+	# %%timeit
+	multiPose3DOuts, vis = multiPose3D(frame, pose2dOutWithTrackId[:], doVis=False, joint_filter_thresh=0.2)
+	for i in range(len(multiPose3DOuts)):
 		multiPose3DOuts[i]["track_id"] = pose2dOutWithTrackId[i]["track_id"]
 	# plt.imshow(vis)
 
@@ -510,7 +526,7 @@ for frameIdx in range(1000,1001, 2):
 	idsToDespawn = existingAvatarIds.difference(idsInScene)
 	for id in idsToDespawn:
 		# print("Sending delete", id, avatarWithIdExists, idsInScene, idsToDespawn)
-		sendCommand(3, np.array([id], dtype=np.int32).tobytes())
+		sendCommand(frameIdx, 3, np.array([id], dtype=np.int32).tobytes())
 		del avatarWithIdExists[id]
 
 	allJointsList = []
@@ -528,6 +544,14 @@ for frameIdx in range(1000,1001, 2):
 		# And similarly y' = y + (z * (c_y_i - img_width/2)) / f_y
 		# z' = z, f_x = f_x_1, f_y = f_y_1
 		# So now, if multiply focal length 5000 camera matrix, will get correct projection to ([-640, 640], [-360, 360])
+		# Want to modify focal so it matches normal camera (30mm). Constraint is that z/focal ratio must stay same (otherwise need to rescale obj in unity)
+		# U_2 = (f_x * x + (img_width/2) * z) / z
+		# V_2 = (f_y * y + (img_height/2) * z) / z
+		# U_3 = (f_x' * x' + (img_width/2) * z') / z'
+		# V_3 = (f_y' * y' + (img_height/2) * z') / z'
+		# => z' = (f_x'/f_x)*z
+		# This doesn't quite work when projecting onto img because also need to re-adj rotation of obj in unity -- authors use 5000 (huge) focal because they're using weak perspective.
+		# Works well for getting reasonable distances, though
 
 		# jointsWorld = multiPose3DOut["joint_cam"].squeeze().cpu().numpy().copy()
 		# jointsWorld[:, 0] = jointsWorld[:, 0] + (((princpt[0] - frame.shape[1]/2) * jointsWorld[:, 2])/cfg.focal[0])
@@ -686,28 +710,35 @@ for frameIdx in range(1000,1001, 2):
 
 		# plot3dPose(jointsUnity, jointSpecUnity)
 
-		# Position character
-		posTarget = np.array([0,-0.1,0]) + multiPose3DOut["smpl_trans"].cpu().numpy()[0]
+		# Position character. [-0.00146268 -0.22157618  0.02742386] is pos of joint 0 for SMPL joint regressor. -- i.e. same pos as joint_cam[0]
+		posTarget = np.array([-0.00146268, -0.22157618,  0.02742386]) + multiPose3DOut["smpl_trans"].cpu().numpy()[0]
+		# posTarget = multiPose3DOut["joint_cam"].squeeze().cpu().numpy()[0]
+		# for i in range(len(multiPose3DOuts)):
+		# 	diff = multiPose3DOuts[1]["joint_cam"].squeeze().cpu().numpy()[0] - multiPose3DOuts[1]["smpl_trans"].cpu().numpy()[0]
+		# #res is always [-0.00146268 -0.22157618  0.02742386]
 		posTarget[0] = posTarget[0] + (((princpt[0] - frame.shape[1]/2) * posTarget[2])/cfg.focal[0])
 		posTarget[1] = posTarget[1] + (((princpt[1] - frame.shape[0]/2) * posTarget[2])/cfg.focal[1])
+		# posTarget[2] = posTarget[2] * (400/cfg.focal[1])
 		posTargetUnity = coordsToUnity(posTarget)
 
 		# posTargetUnity = coordsToUnity(jointsWorld[0])
 		trackId = multiPose3DOut["track_id"]
 		if trackId not in avatarWithIdExists:
-			sendCommand(1, np.array([trackId], dtype=np.int32).tobytes()) # spawn a character
+			sendCommand(frameIdx, 1, np.array([trackId], dtype=np.int32).tobytes()) # spawn a character
 			avatarWithIdExists[trackId] = True
-		sendCommand(2, np.array([trackId], dtype=np.int32).tobytes() + posTargetUnity.astype(np.float32).tobytes())
+		sendCommand(frameIdx, 2, np.array([trackId], dtype=np.int32).tobytes() + posTargetUnity.astype(np.float32).tobytes())
 
 		# list(boneAngles.items())
 		anglesOrderedUnity = np.zeros((13, 4))
 		anglesOrderedUnity[:, :] = quatToUnity([1, 0, 0, 0])
 		anglesOrderedUnity = np.array([quatToUnity(item[1]) for item in boneAnglesUnitySubset.items()])
 		# list(boneAngles.items())[6]
-		sendCommand(5, np.array([trackId], dtype=np.int32).tobytes() +anglesOrderedUnity.astype(np.float32).tobytes())
+		sendCommand(frameIdx, 5, np.array([trackId], dtype=np.int32).tobytes() +anglesOrderedUnity.astype(np.float32).tobytes())
 
 	# In Unity: set image to fill back of camera (with correct aspect ratio, with height filling full height of screen). Then set vertical FOV to this calc fov.
 	cameraVerticalFovDeg = 2 * np.arctan((0.5*frame.shape[0]) / cfg.focal[1]) * (180/np.pi)
+	# cameraVerticalFovDeg
+	# 2 * np.arctan((0.5*frame.shape[0]) / 400) * (180/np.pi)
 	multiPose3DOut["smpl_pose"].reshape(-1, 3)
 
 	#Format: dim 1 is up-down and is reversed (bigger is lower).

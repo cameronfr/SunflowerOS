@@ -84,7 +84,7 @@ public class ClientFastImg : MonoBehaviour {
   public RawImage image;
 
   private Dictionary<int, Character> allCharacters;
-  public GameObject avatar;
+  public GameObject[] avatars;
   public List<HumanBodyBones> bonesList;
 
   public static T[] ArraySlice<T>(T[] orig, int start, int end) {
@@ -99,8 +99,8 @@ public class ClientFastImg : MonoBehaviour {
   public void Start() {
     allCharacters = new Dictionary<int, Character>();
 
-    // tex = new Texture2D(1280, 720, TextureFormat.RGB24, mipChain: false);
-    tex = new Texture2D(1280/2, 720/2, TextureFormat.RGB24, mipChain: false);
+    tex = new Texture2D(1280, 720, TextureFormat.RGB24, mipChain: false);
+    // tex = new Texture2D(1280/2, 720/2, TextureFormat.RGB24, mipChain: false);
     // tex = new Texture2D(960, 540, TextureFormat.RGB24, mipChain: false);
     image.texture = tex;
 
@@ -131,12 +131,14 @@ public class ClientFastImg : MonoBehaviour {
       if (cmd == 0) {
         // Cmd: background image
         // |texture-byte[1280*720]|
+        ScreenCapture.CaptureScreenshot("Screenshots/frame" + System.DateTimeOffset.Now.ToUnixTimeMilliseconds() + ".png");
         tex.LoadRawTextureData(data);
         tex.Apply(updateMipmaps: false);
       } else if (cmd == 1) {
         // Cmd: spawn new avatar with id. have it save its joint positions.
         // |id-int32|
-        GameObject characterRaw = Instantiate(avatar, new Vector3(1 * 2.0f, 0, 0), Quaternion.identity);
+        GameObject randomAvatarTemplate = avatars[UnityEngine.Random.Range(0, avatars.Length)];
+        GameObject characterRaw = Instantiate(randomAvatarTemplate, new Vector3(1 * 2.0f, 0, 0), Quaternion.identity);
         Character character = characterRaw.AddComponent<Character>() as Character;
 
         // Temp test
