@@ -1,0 +1,6 @@
+[submodule "SandboxingAggregator/lib/forge-std"]
+	path = SandboxingAggregator/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std
+[submodule "SandboxingAggregator/lib/openzeppelin-contracts"]
+	path = SandboxingAggregator/lib/openzeppelin-contracts
+	url = https://github.com/openzeppelin/openzeppelin-contracts
