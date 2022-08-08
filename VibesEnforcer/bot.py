@@ -1,4 +1,5 @@
 import discord
+from googleapiclient import discovery
 import asyncio
 import random
 import openai
@@ -9,6 +10,7 @@ import re
 import json
 import textwrap
 from html import unescape
+import numpy as np
 
 class DictToObject(object):
 	def __init__(self, d):
@@ -18,7 +20,29 @@ class DictToObject(object):
 			else:
 			   setattr(self, a, obj(b) if isinstance(b, dict) else b)
 
-openai.api_key ="sk-L10VQgEma7q8OvDDFy87HldRb5zNfid8nvW8bEiH"
+openai.api_key =""
+
+perspectiveApiKey = ""
+perspectiveClient = discovery.build(
+  "commentanalyzer",
+  "v1alpha1",
+  developerKey=perspectiveApiKey,
+  discoveryServiceUrl="https://commentanalyzer.googleapis.com/$discovery/rest?version=v1alpha1",
+  static_discovery=False,
+)
+def perspectiveAnalyze(comment):
+	analyze_request = {
+	  'comment': { 'text': comment},
+	  'requestedAttributes': {'TOXICITY': {}, 'IDENTITY_ATTACK': {}, 'INSULT': {}, 'PROFANITY': {}, 'THREAT': {}}
+	}
+	response = perspectiveClient.comments().analyze(body=analyze_request).execute()
+	out = {"ALL": []}
+	for trait in ["TOXICITY", "IDENTITY_ATTACK", "INSULT", "THREAT"]:
+		out[trait] = response["attributeScores"][trait]["summaryScore"]["value"]
+		out["ALL"].append(out[trait])
+	return out
+perspectiveAnalyze("What a waste of time. You could be making other stuff and you make this...")
+perspectiveAnalyze("lol what the fuckk that's crazy, love it") # 0.88 for insult even though not an insult.
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -26,7 +50,6 @@ bot = discord.Bot(intents=intents)
 
 # {transformedMsg: str, untransformedMsg: str, author: author obj}
 msgHistory = []
-
 def makeHistoryPrompt(messages):
 	authorToName = lambda a: a.name + str(a.id)[:3]
 	# Make prompt from msg history
@@ -37,6 +60,17 @@ def makeHistoryPrompt(messages):
 		Message from {authorString}:\n
 		{msg["untransformedMsg"]}""")
 	return historyPrompt.strip()
+
+def makeProfilePrompt(*args):
+	profilePrompt = ""
+
+	for author in args:
+		authorName = authorToName(author)
+		profilePrompt += textwrap.dedent(f"""
+		{authorName} is an esteemed and respectful member of the community.
+		""").strip() + "\n"
+	return profilePrompt.strip()
+
 
 def getCompletionOAI(*args, **kwargs):
 	defaultArgs = dict(
@@ -49,19 +83,31 @@ def getCompletionOAI(*args, **kwargs):
 	  stop=["Message from"],
 	)
 	combinedArgs = {**defaultArgs, **kwargs}
-	print(combinedArgs)
 	response = openai.Completion.create(**combinedArgs)
 	responseText = response.choices[0].text.strip()
+
+
+	print("---------- Running Prompt ----------")
+	print(kwargs["prompt"])
+	if "suffix" in kwargs:
+		print("[INSERT]" + kwargs["suffix"])
+	print("--ARGS:", combinedArgs)
+	print("--RESP:", responseText)
+	print("---------- ----------- ----------")
+
 	return responseText
 
-# Predict feeling of author:
-def predictFeeling(messages, author):
+authorToName = lambda a: a.name + str(a.id)[:3]
+
+# Predict feeling of author. Also feeling of other participants, and of readers:
+# Prime for response of form "I [felt ...]", where the "I" is give
+def predictFeelingGPT(messages, author):
 	#How this message makes barney129 feel, and why:
 	#How this message makes barney129 feel, and why [usually one word]
 	# Message from barney129, detailing their feelings:
 	# Message from barney129, detailing how the message made them feel: [makes output more specific to last message]
 	# Explanation of barney129's feelings, and why:
-	authorToName = lambda a: a.name + str(a.id)[:3]
+	profilePrompt = makeProfilePrompt(author)
 	historyPrompt = makeHistoryPrompt(messages[-5:])
 
 	# Make full prompt with newest message
@@ -69,23 +115,38 @@ def predictFeeling(messages, author):
 	authorString = authorToName(author)
 	if messages[-1]["author"].id != author.id:
 		# Predict how latest message will affect others
-		fullPrompt = historyPrompt + textwrap.dedent(f"""\n
+		fullPrompt = profilePrompt + "\n\n" + historyPrompt + "\n\n" + textwrap.dedent(f"""
 		Message from {authorString} detailing how the message made them feel:
-		""")
+
+		I
+		""").strip()
 	else:
 		# If latest message is author, predict how writer of that message is feeling
-		fullPrompt = historyPrompt + textwrap.dedent(f"""\n
+		fullPrompt = profilePrompt + "\n" + historyPrompt + "\n\n" + textwrap.dedent(f"""
 		Message from {authorString} detailing their feelings:
-		""")
 
-	print("---------- Full Prompt (Feeling) ----------\n", fullPrompt, "---------- ----------- ----------")
+		I
+		""").strip()
+
+	# print("---------- Full Prompt (Feeling) ----------\n", fullPrompt, "---------- ----------- ----------")
 
 	# Feed into gpt-3
 	responseText = getCompletionOAI(prompt=fullPrompt, temperature=0.4)
-	return responseText
+	return "I " + responseText
+
+def predictFeelingPSP(messages):
+	# [Toxicity Detection can be Sensitive to the Conversational Context]: concat parent post context to improve MAE (fig 5)
+	prompt = ""
+	if len(messages) > 1:
+		prompt += messages[-2]["untransformedMsg"] + "\n\n"
+	prompt += messages[-1]["untransformedMsg"]
+
+	out = perspectiveAnalyze(prompt)
+	return out
+
 
 # If feeling bad, include a diffuse. Sentiment one-dimensional, next step is to have model to choose amongst say ~20 feelings/scenarios -- things that are happening in the chat--, and have reactions / actions for each of those.
-# Update: this does not work well for knowing when to take action. 
+# Update: this does not work well for knowing when to take action.
 def evaluateFeelingIsGood(feelingString):
 	# Curie is not good enough, either wrong or won't give Y/n answer
 	# feelingString = "i feel disappointed and betrayed"
@@ -103,6 +164,53 @@ def evaluateFeelingIsGood(feelingString):
 	else:
 		return True
 
+# Repectful diffuse author of messages[-2] and messages[-1], where messages[-1] is the offending message
+def respectfulDiffuse(messages):
+	# messages = [
+	# 	fakeMsg("B", "Hi all"),
+	# 	fakeMsg("A", "... To Be Continued. Please join us in creating lore and experimenting with new tools for storytelling & collaboration! http://discord.gg/XfBPAxv "),
+	# 	fakeMsg("B", "This project was literally a soft rug pull")
+	# ]
+
+	offendingAuthor = messages[-1]["author"]
+	offendedAuthor = messages[-2]["author"]
+	historyPrompt = makeHistoryPrompt(messages[-5:])
+
+	feelingPrediction = predictFeelingGPT(messages, offendedAuthor)
+	# feelingPrediction = "fuck you too"
+	offendingName = authorToName(offendingAuthor)
+	offendedName = authorToName(offendedAuthor)
+
+	profilePrompt = makeProfilePrompt(offendingAuthor)
+
+	respectDiffusePrompt = f"""
+{profilePrompt}
+
+{historyPrompt}
+
+Message from {offendedName}:
+
+{feelingPrediction}
+
+Kind message from {offendingName} explaining himself:
+Sorry[insert]
+
+Message from {offendedName}:
+
+🙏  appreciate it
+"""
+	print(respectDiffusePrompt)
+
+	respectfulDiffusion = getCompletionOAI(
+      prompt=respectDiffusePrompt.split("[insert]")[0],
+      suffix=respectDiffusePrompt.split("[insert]")[1],
+      temperature=0.4,
+      best_of=1,
+      max_tokens=128,
+    )
+
+	return "Sorry " + respectfulDiffusion
+
 # Transform the last message in messages to be respectful
 def transformToRespectful(messages):
 	authorToName = lambda a: a.name + str(a.id)[:3]
@@ -117,7 +225,7 @@ def transformToRespectful(messages):
 	{authorString}'s message rewritten to be more kind:
 	""")
 
-	print("---------- Full Prompt Respec ----------\n", fullPrompt, "---------- ----------- ----------")
+	# print("---------- Full Prompt Respec ----------\n", fullPrompt, "---------- ----------- ----------")
 
 	# Feed into gpt-3
 	responseText = getCompletionOAI(prompt=fullPrompt)
@@ -126,6 +234,9 @@ def transformToRespectful(messages):
 
 @bot.slash_command()
 async def s(ctx, msg: str):
+
+	# msg = "hello all"
+
 	await ctx.defer()
 	# author = {"name": ctx.author.name, "id": ctx.author.id}
 	msg = {"untransformedMsg": msg, "author": ctx.author}
@@ -136,8 +247,10 @@ async def s(ctx, msg: str):
 	msgHistory.append(msg)
 
 	recentAuthors = {m["author"].id: m["author"] for m in msgHistory[-20:]}
-	authorFeelings = {a: predictFeeling(msgHistory, a) for a in recentAuthors.values()}
+	authorFeelings = {a: predictFeelingGPT(msgHistory, a) for a in recentAuthors.values()}
+	authorFeelingsPSP = predictFeelingPSP(msgHistory)
 	msg["authorFeelings"] = authorFeelings
+	msg["authorFeelingsPSP"] = authorFeelingsPSP
 
 	debugChannel = bot.get_channel(1003782764484632596)
 
@@ -150,16 +263,21 @@ async def s(ctx, msg: str):
 	**Transf**: {msg['transformedMsg'].strip()}
 	{feelingsString}
 	""").strip()
-	printOut = f"""**{ctx.author.name}**: {msg['untransformedMsg']}
+	printOutDebug = f"""**{ctx.author.name}**: {msg['untransformedMsg']}
 	{textwrap.indent(indentedBlock, '    ')}"""
 
-	await debugChannel.send(printOut)
+	printOut = msg["untransformedMsg"]
+	if np.max(msg["authorFeelingsPSP"]["ALL"]) > 0.3:
+		diffuse = respectfulDiffuse(msgHistory)
+		printOut += " *" + diffuse + "*"
+
+	await debugChannel.send(printOutDebug)
 	await ctx.respond(printOut)
 
 # Dev command to simulate a message from another user
 @bot.slash_command()
 async def sim(ctx, auth: str, msg: str):
-	author = DictToObject({"name": auth[:-3], "id": auth[-3:]})
+	author = fakeAuthor(auth)
 	ctx.author = author
 	await s(ctx, msg)
 
@@ -170,6 +288,20 @@ async def srerun(ctx):
 	transformedMsg = transformToRespectful(msgHistory)
 	authorName = msgHistory[-1]["author"].name
 	await ctx.respond(f"**{authorName}**: {transformedMsg}\n*Orig: {msgHistory[-1]['untransformedMsg']}*")
+
+# For testing stuff
+def fakeAuthor(name):
+	id = hash(name) % 1000
+	author = DictToObject({"name": name, "id": id})
+	return author
+
+def fakeCtx(author):
+	ctx = DictToObject({"author": author})
+	return ctx
+
+def fakeMsg(auth, msgTxt):
+	msg = {"untransformedMsg": msgTxt, "author": fakeAuthor(auth)}
+	return msg
 
 
 # @bot.event
@@ -182,4 +314,4 @@ async def srerun(ctx):
 
 
 
-task = asyncio.get_event_loop().create_task(bot.start("MTAwMzczODAyNTYzMDYyOTkxOQ.GOTcQo.iCpIFd0UhrS-nhWHo3BzvHCCOd5O96nPpN0vTM"))
+task = asyncio.get_event_loop().create_task(bot.start(""))
