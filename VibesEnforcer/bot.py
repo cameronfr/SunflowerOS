@@ -36,17 +36,27 @@ def perspectiveAnalyze(comment):
 	  'requestedAttributes': {'TOXICITY': {}, 'IDENTITY_ATTACK': {}, 'INSULT': {}, 'PROFANITY': {}, 'THREAT': {}}
 	}
 	response = perspectiveClient.comments().analyze(body=analyze_request).execute()
-	out = {"ALL": []}
+	out = {}
 	for trait in ["TOXICITY", "IDENTITY_ATTACK", "INSULT", "THREAT"]:
 		out[trait] = response["attributeScores"][trait]["summaryScore"]["value"]
-		out["ALL"].append(out[trait])
 	return out
 perspectiveAnalyze("What a waste of time. You could be making other stuff and you make this...")
 perspectiveAnalyze("lol what the fuckk that's crazy, love it") # 0.88 for insult even though not an insult.
 
 intents = discord.Intents.default()
 intents.message_content = True
-bot = discord.Bot(intents=intents)
+class MyClient(discord.Bot):
+	async def on_ready(self):
+		print(f"Logged in as {self.user} (ID: {self.user.id})")
+		print("------")
+
+	async def on_message(self, message: discord.Message):
+		# Make sure we won't be replying to ourselves.
+		if message.author.id == self.user.id:
+			return
+		# print("Got msg", message.content)
+# bot = discord.Bot(intents=intents)
+bot = MyClient(intents=intents)
 
 # {transformedMsg: str, untransformedMsg: str, author: author obj}
 msgHistory = []
@@ -76,7 +86,7 @@ def getCompletionOAI(*args, **kwargs):
 	defaultArgs = dict(
 	  engine="text-davinci-002",
 	  temperature=0.7,
-	  max_tokens=30,
+	  max_tokens=60,
 	  top_p=1,
 	  frequency_penalty=0,
 	  presence_penalty=0,
@@ -116,23 +126,23 @@ def predictFeelingGPT(messages, author):
 	if messages[-1]["author"].id != author.id:
 		# Predict how latest message will affect others
 		fullPrompt = profilePrompt + "\n\n" + historyPrompt + "\n\n" + textwrap.dedent(f"""
-		Message from {authorString} detailing how the message made them feel:
+		Message from {authorString} detailing how the message made them feel, and why:
 
-		I
+		I feel
 		""").strip()
 	else:
 		# If latest message is author, predict how writer of that message is feeling
 		fullPrompt = profilePrompt + "\n" + historyPrompt + "\n\n" + textwrap.dedent(f"""
 		Message from {authorString} detailing their feelings:
 
-		I
+		I feel
 		""").strip()
 
 	# print("---------- Full Prompt (Feeling) ----------\n", fullPrompt, "---------- ----------- ----------")
 
 	# Feed into gpt-3
 	responseText = getCompletionOAI(prompt=fullPrompt, temperature=0.4)
-	return "I " + responseText
+	return "I feel " + responseText
 
 def predictFeelingPSP(messages):
 	# [Toxicity Detection can be Sensitive to the Conversational Context]: concat parent post context to improve MAE (fig 5)
@@ -142,7 +152,15 @@ def predictFeelingPSP(messages):
 	prompt += messages[-1]["untransformedMsg"]
 
 	out = perspectiveAnalyze(prompt)
-	return out
+	out_nocontext = perspectiveAnalyze(messages[-1]["untransformedMsg"])
+	out_combined = {"ALL": []}
+
+	for trait in out:
+		val = max(out[trait], out_nocontext[trait])
+		out_combined[trait] = val
+		out_combined["ALL"].append(val)
+
+	return out_combined
 
 
 # If feeling bad, include a diffuse. Sentiment one-dimensional, next step is to have model to choose amongst say ~20 feelings/scenarios -- things that are happening in the chat--, and have reactions / actions for each of those.
@@ -193,23 +211,25 @@ Message from {offendedName}:
 {feelingPrediction}
 
 Kind message from {offendingName} explaining himself:
-Sorry[insert]
+
+I'm sorry[insert]
 
 Message from {offendedName}:
 
 🙏  appreciate it
 """
-	print(respectDiffusePrompt)
+# 🙏  appreciate it
+	# print(respectDiffusePrompt)
 
 	respectfulDiffusion = getCompletionOAI(
-      prompt=respectDiffusePrompt.split("[insert]")[0],
-      suffix=respectDiffusePrompt.split("[insert]")[1],
-      temperature=0.4,
-      best_of=1,
-      max_tokens=128,
-    )
+	  prompt=respectDiffusePrompt.split("[insert]")[0],
+	  suffix=respectDiffusePrompt.split("[insert]")[1],
+	  temperature=0.4,
+	  best_of=1,
+	  max_tokens=128,
+	)
 
-	return "Sorry " + respectfulDiffusion
+	return "I'm sorry " + respectfulDiffusion
 
 # Transform the last message in messages to be respectful
 def transformToRespectful(messages):
@@ -231,14 +251,18 @@ def transformToRespectful(messages):
 	responseText = getCompletionOAI(prompt=fullPrompt)
 	return responseText
 
+def qBlock(text):
+	return textwrap.indent(text, "> ", lambda line: True)
 
 @bot.slash_command()
 async def s(ctx, msg: str):
 
-	# msg = "hello all"
 
 	await ctx.defer()
 	# author = {"name": ctx.author.name, "id": ctx.author.id}
+	# msg = fakeMsg("a", "hello all");
+	# ctx=fakeCtx(msg["author"])
+	# msg = msgHistory[-1]
 	msg = {"untransformedMsg": msg, "author": ctx.author}
 	# msg = {"untransformedMsg": msg, "author": "none"}
 	transformedMsg = transformToRespectful(msgHistory + [msg])
@@ -254,22 +278,29 @@ async def s(ctx, msg: str):
 
 	debugChannel = bot.get_channel(1003782764484632596)
 
+
 	# Format stuff
 	feelingsString = ""
-	for a in authorFeelings:
-		feelingIsGood = "Good" if evaluateFeelingIsGood(authorFeelings[a]) else "Bad"
-		feelingsString += textwrap.indent(f"\n**f_{a.name}**: {authorFeelings[a]}, **{feelingIsGood}**", "\t")
-	indentedBlock = (f"""
-	**Transf**: {msg['transformedMsg'].strip()}
-	{feelingsString}
+	for a in msg["authorFeelings"]:
+		feelingString = msg["authorFeelings"][a]
+		feelingIsGood = "Good" if evaluateFeelingIsGood(feelingString) else "Bad"
+		feelingsString += qBlock(f"**{a.name}**: {feelingString}, **{feelingIsGood}**\n")
+	printOutDebug = textwrap.dedent(f"""
+---------
+**{ctx.author.name}**: \n{qBlock(msg['untransformedMsg'])}
+**Transform**: \n{qBlock(msg['transformedMsg'].strip())}
+**FeelPSP**: \n{qBlock(str(msg["authorFeelingsPSP"]))}
+**FeelGPTPred**: \n{feelingsString}
 	""").strip()
-	printOutDebug = f"""**{ctx.author.name}**: {msg['untransformedMsg']}
-	{textwrap.indent(indentedBlock, '    ')}"""
+	# print(printOutDebug)
 
-	printOut = msg["untransformedMsg"]
-	if np.max(msg["authorFeelingsPSP"]["ALL"]) > 0.3:
+	printOut = f"**{ctx.author.name}**: " + msg["untransformedMsg"]
+	if np.max(msg["authorFeelingsPSP"]["ALL"]) > 0.2:
+		parentAuthor = msgHistory[-2]["author"]
+		parentFeeling = msg["authorFeelings"][parentAuthor]
+		printOut += "\n" + qBlock(f"**{parentAuthor.name}**: {parentFeeling}")
 		diffuse = respectfulDiffuse(msgHistory)
-		printOut += " *" + diffuse + "*"
+		printOut += "\n*" + diffuse + "*"
 
 	await debugChannel.send(printOutDebug)
 	await ctx.respond(printOut)
@@ -288,6 +319,13 @@ async def srerun(ctx):
 	transformedMsg = transformToRespectful(msgHistory)
 	authorName = msgHistory[-1]["author"].name
 	await ctx.respond(f"**{authorName}**: {transformedMsg}\n*Orig: {msgHistory[-1]['untransformedMsg']}*")
+
+# Dev command to clear history
+@bot.slash_command()
+async def clear(ctx):
+	await ctx.defer()
+	msgHistory.clear()
+	await ctx.respond("History Cleared")
 
 # For testing stuff
 def fakeAuthor(name):
