@@ -1,3 +1,4 @@
+#%%#
 import discord
 from googleapiclient import discovery
 import asyncio
@@ -12,6 +13,10 @@ import textwrap
 from html import unescape
 import numpy as np
 import os
+import markdown
+from IPython.display import display, HTML
+
+# display(HTML("<h2 style='padding: 10px'>Arc</h2><table class='table table-striped'> <thead> <tr> <th>#</th> <th>First Name</th> <th>Last Name</th> <th>Username</th> </tr> </thead> <tbody> <tr> <th scope='row'>1</th> <td>Mark</td> <td>Otto</td> <td>@mdo</td> </tr> <tr> <th scope='row'>2</th> <td>Jacob</td> <td>Thornton</td> <td>@fat</td> </tr> <tr> <th scope='row'>3</th> <td>Larry</td> <td>the Bird</td> <td>@twitter</td> </tr> </tbody> </table>"))
 
 class DictToObject(object):
 	def __init__(self, d):
@@ -52,7 +57,6 @@ intents.message_content = True
 bot = discord.Bot(intents=intents)
 
 # {transformedMsg: str, untransformedMsg: str, author: author obj}
-msgHistory = []
 def makeHistoryPrompt(messages):
 	authorToName = lambda a: a.name + str(a.id)[:3]
 	# Make prompt from msg history
@@ -89,16 +93,22 @@ def getCompletionOAI(*args, **kwargs):
 	response = openai.Completion.create(**combinedArgs)
 	responseText = response.choices[0].text.strip()
 
-
-	print("---------- Running Prompt ----------")
-	print(kwargs["prompt"])
+	promptDebug = ""
+	promptDebug += str(kwargs["prompt"])
 	if "suffix" in kwargs:
-		print("[INSERT]" + kwargs["suffix"])
-	print("--ARGS:", combinedArgs)
-	print("--RESP:", responseText)
-	print("---------- ----------- ----------")
+		promptDebug += "[INSERT]" + str(kwargs["suffix"])
+	promptDebug += "\n" + "--ARGS:" + str(combinedArgs)
+	# print("---------- Running Prompt ----------")
+	# print(kwargs["prompt"])
+	# if "suffix" in kwargs:
+	# 	print("[INSERT]" + kwargs["suffix"])
+	# print("--ARGS:", combinedArgs)
+	# print("--RESP:", responseText)
+	# print("---------- ----------- ----------")
 
-	return responseText
+	prediction = {"promptDebug": promptDebug, "responseText": responseText}
+
+	return prediction
 
 authorToName = lambda a: a.name + str(a.id)[:3]
 
@@ -134,8 +144,9 @@ def predictFeelingGPT(messages, author):
 	# print("---------- Full Prompt (Feeling) ----------\n", fullPrompt, "---------- ----------- ----------")
 
 	# Feed into gpt-3
-	responseText = getCompletionOAI(prompt=fullPrompt, temperature=0.4)
-	return "I feel " + responseText
+	prediction = getCompletionOAI(prompt=fullPrompt, temperature=0.4)
+	prediction["responseText"] = "I feel " + prediction["responseText"]
+	return prediction
 
 def predictFeelingPSP(messages):
 	# [Toxicity Detection can be Sensitive to the Conversational Context]: concat parent post context to improve MAE (fig 5)
@@ -169,7 +180,8 @@ def evaluateFeelingIsGood(feelingString):
 
 	Is this a good feeling:""").strip()
 
-	responseText = getCompletionOAI(prompt=prompt, temperature=0, max_tokens=3)
+	prediction = getCompletionOAI(prompt=prompt, temperature=0, max_tokens=3)
+	responseText = prediction["responseText"]
 	if "no" in responseText.lower():
 		return False
 	else:
@@ -187,7 +199,11 @@ def respectfulDiffuse(messages):
 	offendedAuthor = messages[-2]["author"]
 	historyPrompt = makeHistoryPrompt(messages[-5:])
 
-	feelingPrediction = predictFeelingGPT(messages, offendedAuthor)
+	if "authorFeelings" in messages[-1]:
+		feelingPredictionText = messages[-1]["authorFeelings"][offendedAuthor]["responseText"]
+	else:
+		raise Exception("feeling not predicted")
+	# feelingPrediction = predictFeelingGPT(messages, offendedAuthor)
 	# feelingPrediction = "fuck you too"
 	offendingName = authorToName(offendingAuthor)
 	offendedName = authorToName(offendedAuthor)
@@ -201,7 +217,7 @@ def respectfulDiffuse(messages):
 
 Message from {offendedName}:
 
-{feelingPrediction}
+{feelingPredictionText}
 
 Kind message from {offendingName} explaining himself:
 
@@ -221,8 +237,9 @@ Message from {offendedName}:
 	  best_of=1,
 	  max_tokens=128,
 	)
+	respectfulDiffusion["responseText"] = "I'm sorry " + respectfulDiffusion["responseText"]
 
-	return "I'm sorry " + respectfulDiffusion
+	return respectfulDiffusion
 
 # Transform the last message in messages to be respectful
 def transformToRespectful(messages):
@@ -241,22 +258,13 @@ def transformToRespectful(messages):
 	# print("---------- Full Prompt Respec ----------\n", fullPrompt, "---------- ----------- ----------")
 
 	# Feed into gpt-3
-	responseText = getCompletionOAI(prompt=fullPrompt)
-	return responseText
+	prediction = getCompletionOAI(prompt=fullPrompt)
+	return prediction
 
 def qBlock(text):
 	return textwrap.indent(text, "> ", lambda line: True)
 
-@bot.slash_command()
-async def s(ctx, msg: str):
-
-	await ctx.defer()
-	# author = {"name": ctx.author.name, "id": ctx.author.id}
-	# msg = fakeMsg("a", "hello all");
-	# ctx=fakeCtx(msg["author"])
-	# msg = msgHistory[-1]
-	msg = {"untransformedMsg": msg, "author": ctx.author}
-	# msg = {"untransformedMsg": msg, "author": "none"}
+def processMessage(msg, msgHistory):
 	transformedMsg = transformToRespectful(msgHistory + [msg])
 
 	msg["transformedMsg"] = transformedMsg
@@ -268,33 +276,76 @@ async def s(ctx, msg: str):
 	msg["authorFeelings"] = authorFeelings
 	msg["authorFeelingsPSP"] = authorFeelingsPSP
 
-	debugChannel = bot.get_channel(1003782764484632596)
+	if np.max(msg["authorFeelingsPSP"]["ALL"]) > 0.2:
+		parentAuthor = msgHistory[-2]["author"]
+		parentFeelingTxt = msg["authorFeelings"][parentAuthor]["responseText"]
+		fullDiffuse = ""
+		fullDiffuse += "\n" + qBlock(f"**{parentAuthor.name}**: {parentFeelingTxt}")
+		diffuse = respectfulDiffuse(msgHistory)
+		fullDiffuse += "\n\n*" + diffuse["responseText"] + "*"
+		msg["fullDiffuse"] = fullDiffuse
 
+def debugViewMsgHistory(msgHistory):
+
+	# Takes msgHistory and outputs and html css grid table of the messages
+	html = "<style>.item {border: 1px solid black; padding: 10px}</style>"
+	html += "<div style=" + "\"display: grid; grid-template-columns: 60px repeat(4, 150px) 250px; grid-gap: 0px;\"" + ">"
+
+	# Table Header
+	html += "<div class='item'> <b>Author</b> </div>"
+	html += "<div class='item'> <b>Message</b> </div>"
+	html += "<div class='item'> <b>Transformed Message</b> </div>"
+	html += "<div class='item'> <b>Feeling</b> </div>"
+	html += "<div class='item'> <b>Feeling PSP</b> </div>"
+	html += "<div class='item'> <b>Full Diffuse</b> </div>"
+
+	for msg in msgHistory:
+		html += "<div class='item'> " + authorToName(msg["author"]) + " </div>"
+		html += "<div class='item'> " + msg["untransformedMsg"] + " </div>"
+		html += "<div class='item'> " + msg["transformedMsg"]["responseText"] + " </div>"
+		html += "<div class='item'> "
+		for feeling in msg["authorFeelings"]:
+			# format of <b>Author</b>: Feeling
+			html += "<div class='item'> " + "<b>" + authorToName(feeling) + "</b>" + ": " + msg["authorFeelings"][feeling]["responseText"] + " </div>"
+		html += "</div>"
+		html += "<div class='item'> " + str(msg["authorFeelingsPSP"]["ALL"]) + " </div>"
+		fullDiffuse = msg["fullDiffuse"] if "fullDiffuse" in msg else ""
+		html += "<div class='item'> " + markdown.markdown(fullDiffuse) + " </div>"
+	display(HTML(html))
+
+msgHistoryDiscordBot = []
+@bot.slash_command()
+async def s(ctx, msg: str):
+	await ctx.defer()
+	# author = {"name": ctx.author.name, "id": ctx.author.id}
+	# msg = fakeMsg("a", "hello all");
+	# ctx=fakeCtx(msg["author"])
+	# msg = msgHistory[-1]
+	msg = {"untransformedMsg": msg, "author": ctx.author}
+	processMessage(msg, msgHistoryDiscordBot)
+
+	debugChannel = bot.get_channel(1003782764484632596)
 
 	# Format stuff
 	feelingsString = ""
 	for a in msg["authorFeelings"]:
-		feelingString = msg["authorFeelings"][a]
+		feelingString = msg["authorFeelings"][a]["responseText"]
 		feelingIsGood = "Good" if evaluateFeelingIsGood(feelingString) else "Bad"
 		feelingsString += qBlock(f"**{a.name}**: {feelingString}, **{feelingIsGood}**\n")
 	printOutDebug = textwrap.dedent(f"""
 ---------
 **{ctx.author.name}**: \n{qBlock(msg['untransformedMsg'])}
-**Transform**: \n{qBlock(msg['transformedMsg'].strip())}
+**Transform**: \n{qBlock(msg['transformedMsg']["responseText"].strip())}
 **FeelPSP**: \n{qBlock(str(msg["authorFeelingsPSP"]))}
 **FeelGPTPred**: \n{feelingsString}
 	""").strip()
 	# print(printOutDebug)
 
 	printOut = f"**{ctx.author.name}**: " + msg["untransformedMsg"]
-	if np.max(msg["authorFeelingsPSP"]["ALL"]) > 0.2:
-		parentAuthor = msgHistory[-2]["author"]
-		parentFeeling = msg["authorFeelings"][parentAuthor]
-		printOut += "\n" + qBlock(f"**{parentAuthor.name}**: {parentFeeling}")
-		diffuse = respectfulDiffuse(msgHistory)
-		printOut += "\n*" + diffuse + "*"
+	if "fullDiffuse" in msg:
+		printOut += msg["fullDiffuse"]
 
-	await debugChannel.send(printOutDebug)
+	# await debugChannel.send(printOutDebug)
 	await ctx.respond(printOut)
 
 # Dev command to simulate a message from another user
@@ -303,14 +354,6 @@ async def sim(ctx, auth: str, msg: str):
 	author = fakeAuthor(auth)
 	ctx.author = author
 	await s(ctx, msg)
-
-# Dev command to rerun last prediction
-@bot.slash_command()
-async def srerun(ctx):
-	await ctx.defer()
-	transformedMsg = transformToRespectful(msgHistory)
-	authorName = msgHistory[-1]["author"].name
-	await ctx.respond(f"**{authorName}**: {transformedMsg}\n*Orig: {msgHistory[-1]['untransformedMsg']}*")
 
 # Dev command to clear history
 @bot.slash_command()
@@ -350,15 +393,20 @@ def fakeMsg(auth, msgTxt):
 
 task = asyncio.get_event_loop().create_task(bot.start(secrets["discordApiKey"]))
 
+# A function that outputs an html table with IPython.display.HTML:
+
 async def testExchange(inlines):
-	msgHistory.clear()
+	msgHistory = []
 	lines = inlines.strip().split("\n")
-	messages = []
 	for line in lines:
 		authName = line[:1]
 		msgTxt = line[2:]
 		ctx = fakeCtx(fakeAuthor(authName))
-		await s(ctx, msgTxt)
+		msg = {"untransformedMsg": msgTxt, "author": ctx.author}
+		processMessage(msg, msgHistory)
+	debugViewMsgHistory(msgHistory)
+
+#%%#
 
 await testExchange("""
 A: so, anyone see the new marvel movie?
