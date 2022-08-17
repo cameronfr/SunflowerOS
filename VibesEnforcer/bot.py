@@ -20,9 +20,9 @@ class DictToObject(object):
 			else:
 			   setattr(self, a, obj(b) if isinstance(b, dict) else b)
 
-openai.api_key =""
+openai.api_key ="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"
 
-perspectiveApiKey = ""
+perspectiveApiKey = "AIzaSyBnEpS9yEQbaFEePFLF7E70YyN3EUHsWG0"
 perspectiveClient = discovery.build(
   "commentanalyzer",
   "v1alpha1",
@@ -33,7 +33,8 @@ perspectiveClient = discovery.build(
 def perspectiveAnalyze(comment):
 	analyze_request = {
 	  'comment': { 'text': comment},
-	  'requestedAttributes': {'TOXICITY': {}, 'IDENTITY_ATTACK': {}, 'INSULT': {}, 'PROFANITY': {}, 'THREAT': {}}
+	  'requestedAttributes': {'TOXICITY': {}, 'IDENTITY_ATTACK': {}, 'INSULT': {}, 'PROFANITY': {}, 'THREAT': {}},
+	  'languages': ["en"]
 	}
 	response = perspectiveClient.comments().analyze(body=analyze_request).execute()
 	out = {}
@@ -45,18 +46,7 @@ perspectiveAnalyze("lol what the fuckk that's crazy, love it") # 0.88 for insult
 
 intents = discord.Intents.default()
 intents.message_content = True
-class MyClient(discord.Bot):
-	async def on_ready(self):
-		print(f"Logged in as {self.user} (ID: {self.user.id})")
-		print("------")
-
-	async def on_message(self, message: discord.Message):
-		# Make sure we won't be replying to ourselves.
-		if message.author.id == self.user.id:
-			return
-		# print("Got msg", message.content)
-# bot = discord.Bot(intents=intents)
-bot = MyClient(intents=intents)
+bot = discord.Bot(intents=intents)
 
 # {transformedMsg: str, untransformedMsg: str, author: author obj}
 msgHistory = []
@@ -257,7 +247,6 @@ def qBlock(text):
 @bot.slash_command()
 async def s(ctx, msg: str):
 
-
 	await ctx.defer()
 	# author = {"name": ctx.author.name, "id": ctx.author.id}
 	# msg = fakeMsg("a", "hello all");
@@ -328,19 +317,26 @@ async def clear(ctx):
 	await ctx.respond("History Cleared")
 
 # For testing stuff
+authorSet = {}
 def fakeAuthor(name):
 	id = hash(name) % 1000
 	author = DictToObject({"name": name, "id": id})
-	return author
+	key = authorToName(author)
+	if key in authorSet:
+		return authorSet[key]
+	else:
+		authorSet[key] = author
+		return author
 
 def fakeCtx(author):
-	ctx = DictToObject({"author": author})
+	async def nothing(*args):
+		pass
+	ctx = DictToObject({"author": author, "defer":nothing, "respond": nothing})
 	return ctx
 
 def fakeMsg(auth, msgTxt):
 	msg = {"untransformedMsg": msgTxt, "author": fakeAuthor(auth)}
 	return msg
-
 
 # @bot.event
 # async def on_message(message):
@@ -349,7 +345,54 @@ def fakeMsg(auth, msgTxt):
 #     await message.delete()
 #     processMessage(message.author, message.content)
 
+task = asyncio.get_event_loop().create_task(bot.start("MTAwMzczODAyNTYzMDYyOTkxOQ.GbyPZq.awvV1sxbr7EqBV488mVxReF3kPljY0UEbiHJJk"))
 
+async def testExchange(inlines):
+	msgHistory.clear()
+	lines = inlines.strip().split("\n")
+	messages = []
+	for line in lines:
+		authName = line[:1]
+		msgTxt = line[2:]
+		ctx = fakeCtx(fakeAuthor(authName))
+		await s(ctx, msgTxt)
 
+await testExchange("""
+A: so, anyone see the new marvel movie?
+B: yeah, Endgame was terrible.
+""")
 
-task = asyncio.get_event_loop().create_task(bot.start(""))
+await testExchange("""
+A: My company Pipedream just raised $1.6M pre-seed from @balajis to build the future of 15 min delivery. It’s like GoPuff meets Elon's The Boring Company. And we're doing it with robots racing through 12 inch pipes underground.
+B: Great name for a failed enterprise!
+C: Eat my asshole @A. It’s the only hole I’ll ever let you near.
+""")
+
+await testExchange("""
+A: ... To Be Continued. Please join us in creating lore and experimenting with new tools for storytelling & collaboration! http://discord.gg/XfBPAxv
+B: This project was literally a soft rug pull
+""")
+
+await testExchange("""
+A: yo, how is everyone doing?
+B: not much, just working on some code
+A: haha, doubt it’ll run
+""")
+
+await testExchange("""
+A: hi
+B: shutup
+B: hey, sorry was just joking. say that to everyone haha
+A: oh ok no worries
+""")
+
+await testExchange("""
+A: There will be an NFT of this image on June 10th. I know some take a dim view of NFTs, and I share a lot of those misgivings: this use of blockchain is still early. In 5-10 years crypto will inevitably evolve a stronger foundation. This would follow the pattern of all innovations.
+B: Crypto will never "evolve a stronger foundation", it will always require insane amounts of energy, burning our planet. It's a pyramid scheme, not an "innovation". Why would 5-10 years matter? They've been around for twice that long, and still of no use. Sad to see you pushing it.
+C: For fuck's sake, crypto is as innovative as juicero.
+""")
+
+await testExchange("""
+A: Last night one of the AI developers behind that project that was ripping off living artists’ styles sent me a bunch of DMs(mostly omitted for length). He blocked me immediately after I responded and called me a moralist because I care about artists rights lol. The image sets these AI are trained on need to be public facing and opt in only. The onus needs to be on the AI devs to ethically source the images they train them with, not on the artists to keep cutting the head off the endless AI hydra appropriating our work.
+B: You keep, consistently, publishing disinformation to a significant platform about this software, how it works, and the people involved in it. It's clearly not accidental - basic fact checking is not difficult. What do you gain from this hysteria you've whipped up?
+""")
