@@ -1,6 +1,8 @@
 #%%#
 import discord
-from googleapiclient import discovery
+# from googleapiclient import discovery
+from aiogoogle import Aiogoogle
+
 import asyncio
 import random
 import openai
@@ -15,6 +17,7 @@ import numpy as np
 import os
 import markdown
 from IPython.display import display, HTML
+import aiohttp
 
 # display(HTML("<h2 style='padding: 10px'>Arc</h2><table class='table table-striped'> <thead> <tr> <th>#</th> <th>First Name</th> <th>Last Name</th> <th>Username</th> </tr> </thead> <tbody> <tr> <th scope='row'>1</th> <td>Mark</td> <td>Otto</td> <td>@mdo</td> </tr> <tr> <th scope='row'>2</th> <td>Jacob</td> <td>Thornton</td> <td>@fat</td> </tr> <tr> <th scope='row'>3</th> <td>Larry</td> <td>the Bird</td> <td>@twitter</td> </tr> </tbody> </table>"))
 
@@ -31,26 +34,24 @@ os.chdir(os.path.expanduser("~/Documents/Projects/Sunflower/SunflowerOS/Repo/Vib
 secrets = json.load(open("secrets.json", "rb"))
 openai.api_key = secrets["openaiApiKey"]
 
-perspectiveClient = discovery.build(
-  "commentanalyzer",
-  "v1alpha1",
-  developerKey=secrets["perspectiveApiKey"],
-  discoveryServiceUrl="https://commentanalyzer.googleapis.com/$discovery/rest?version=v1alpha1",
-  static_discovery=False,
-)
-def perspectiveAnalyze(comment):
+async def perspectiveAnalyze(comment):
 	analyze_request = {
 	  'comment': { 'text': comment},
 	  'requestedAttributes': {'TOXICITY': {}, 'IDENTITY_ATTACK': {}, 'INSULT': {}, 'PROFANITY': {}, 'THREAT': {}},
 	  'languages': ["en"]
 	}
-	response = perspectiveClient.comments().analyze(body=analyze_request).execute()
+	async with Aiogoogle(api_key=secrets["perspectiveApiKey"],) as aiogoogle:
+		perspectiveClient = await aiogoogle.discover('commentanalyzer', 'v1alpha1')
+		response = await aiogoogle.as_api_key(
+			perspectiveClient.comments.analyze(json=analyze_request)
+		)
+	# response = perspectiveClient.comments().analyze(body=analyze_request).execute()
 	out = {}
 	for trait in ["TOXICITY", "IDENTITY_ATTACK", "INSULT", "THREAT"]:
 		out[trait] = response["attributeScores"][trait]["summaryScore"]["value"]
 	return out
-perspectiveAnalyze("What a waste of time. You could be making other stuff and you make this...")
-perspectiveAnalyze("lol what the fuckk that's crazy, love it") # 0.88 for insult even though not an insult.
+# await perspectiveAnalyze("What a waste of time. You could be making other stuff and you make this...")
+# await perspectiveAnalyze("lol what the fuckk that's crazy, love it") # 0.88 for insult even though not an insult.
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -79,9 +80,10 @@ def makeProfilePrompt(*args):
 	return profilePrompt.strip()
 
 
-def getCompletionOAI(*args, **kwargs):
+async def getCompletionOAI(*args, **kwargs):
 	defaultArgs = dict(
-	  engine="text-davinci-002",
+	#   engine="text-davinci-002",
+	  model="text-davinci-002",
 	  temperature=0.7,
 	  max_tokens=60,
 	  top_p=1,
@@ -90,8 +92,18 @@ def getCompletionOAI(*args, **kwargs):
 	  stop=["Message from"],
 	)
 	combinedArgs = {**defaultArgs, **kwargs}
-	response = openai.Completion.create(**combinedArgs)
-	responseText = response.choices[0].text.strip()
+	url = "https://api.openai.com/v1/completions"
+	headers={
+		"Content-Type": "application/json",
+		"Authorization": f"Bearer {secrets['openaiApiKey']}",
+	}
+	async with aiohttp.ClientSession() as session:
+		async with session.post(url, json=combinedArgs, headers=headers) as r:
+			responseBody = await r.json()
+	responseText = responseBody["choices"][0]["text"].strip()
+			
+	# response = openai.Completion.create(**combinedArgs)
+	# responseText = response.choices[0].text.strip()
 
 	promptDebug = ""
 	promptDebug += str(kwargs["prompt"])
@@ -116,7 +128,7 @@ authorToName = lambda a: a.name + str(a.id)[:3]
 
 # Predict feeling of author. Also feeling of other participants, and of readers:
 # Prime for response of form "I [felt ...]", where the "I" is give
-def predictFeelingGPT(messages, author):
+async def predictFeelingGPT(messages, author):
 	#How this message makes barney129 feel, and why:
 	#How this message makes barney129 feel, and why [usually one word]
 	# Message from barney129, detailing their feelings:
@@ -146,19 +158,19 @@ def predictFeelingGPT(messages, author):
 	# print("---------- Full Prompt (Feeling) ----------\n", fullPrompt, "---------- ----------- ----------")
 
 	# Feed into gpt-3
-	prediction = getCompletionOAI(prompt=fullPrompt, temperature=0.4)
+	prediction = await getCompletionOAI(prompt=fullPrompt, temperature=0.4)
 	prediction["responseText"] = "I feel " + prediction["responseText"]
 	return prediction
 
-def predictFeelingPSP(messages):
+async def predictFeelingPSP(messages):
 	# [Toxicity Detection can be Sensitive to the Conversational Context]: concat parent post context to improve MAE (fig 5)
 	prompt = ""
 	if len(messages) > 1:
 		prompt += messages[-2]["untransformedMsg"] + "\n\n"
 	prompt += messages[-1]["untransformedMsg"]
 
-	out = perspectiveAnalyze(prompt)
-	out_nocontext = perspectiveAnalyze(messages[-1]["untransformedMsg"])
+	out = await perspectiveAnalyze(prompt)
+	out_nocontext = await perspectiveAnalyze(messages[-1]["untransformedMsg"])
 	out_combined = {"ALL": []}
 
 	for trait in out:
@@ -171,7 +183,7 @@ def predictFeelingPSP(messages):
 
 # If feeling bad, include a diffuse. Sentiment one-dimensional, next step is to have model to choose amongst say ~20 feelings/scenarios -- things that are happening in the chat--, and have reactions / actions for each of those.
 # Update: this does not work well for knowing when to take action.
-def evaluateFeelingIsGood(feelingString):
+async def evaluateFeelingIsGood(feelingString):
 	# Curie is not good enough, either wrong or won't give Y/n answer
 	# feelingString = "i feel disappointed and betrayed"
 
@@ -182,7 +194,7 @@ def evaluateFeelingIsGood(feelingString):
 
 	Is this a good feeling:""").strip()
 
-	prediction = getCompletionOAI(prompt=prompt, temperature=0, max_tokens=3)
+	prediction = await getCompletionOAI(prompt=prompt, temperature=0, max_tokens=3)
 	responseText = prediction["responseText"]
 	if "no" in responseText.lower():
 		return False
@@ -190,7 +202,7 @@ def evaluateFeelingIsGood(feelingString):
 		return True
 
 # Repectful diffuse author of messages[-2] and messages[-1], where messages[-1] is the offending message
-def respectfulDiffuse(messages):
+async def respectfulDiffuse(messages):
 	# messages = [
 	# 	fakeMsg("B", "Hi all"),
 	# 	fakeMsg("A", "... To Be Continued. Please join us in creating lore and experimenting with new tools for storytelling & collaboration! http://discord.gg/XfBPAxv "),
@@ -232,7 +244,7 @@ Message from {offendedName}:
 # 🙏  appreciate it
 	# print(respectDiffusePrompt)
 
-	respectfulDiffusion = getCompletionOAI(
+	respectfulDiffusion = await getCompletionOAI(
 	  prompt=respectDiffusePrompt.split("[insert]")[0],
 	  suffix=respectDiffusePrompt.split("[insert]")[1],
 	  temperature=0.4,
@@ -244,7 +256,7 @@ Message from {offendedName}:
 	return respectfulDiffusion
 
 # Transform the last message in messages to be respectful
-def transformToRespectful(messages):
+async def transformToRespectful(messages):
 	authorToName = lambda a: a.name + str(a.id)[:3]
 	historyPrompt = makeHistoryPrompt(messages[-6:-1])
 
@@ -260,30 +272,30 @@ def transformToRespectful(messages):
 	# print("---------- Full Prompt Respec ----------\n", fullPrompt, "---------- ----------- ----------")
 
 	# Feed into gpt-3
-	prediction = getCompletionOAI(prompt=fullPrompt)
+	prediction = await getCompletionOAI(prompt=fullPrompt)
 	return prediction
 
 def qBlock(text):
 	return textwrap.indent(text, "> ", lambda line: True)
 
-def processMessage(msg, msgHistory):
-	transformedMsg = transformToRespectful(msgHistory + [msg])
+async def processMessage(msg, msgHistory):
+	transformedMsg = await transformToRespectful(msgHistory + [msg])
 
 	msg["transformedMsg"] = transformedMsg
 	msgHistory.append(msg)
 
 	recentAuthors = {m["author"].id: m["author"] for m in msgHistory[-20:]}
-	authorFeelings = {a: predictFeelingGPT(msgHistory, a) for a in recentAuthors.values()}
-	authorFeelingsPSP = predictFeelingPSP(msgHistory)
+	authorFeelings = {a: await predictFeelingGPT(msgHistory, a) for a in recentAuthors.values()}
+	authorFeelingsPSP = await predictFeelingPSP(msgHistory)
 	msg["authorFeelings"] = authorFeelings
 	msg["authorFeelingsPSP"] = authorFeelingsPSP
 
-	if np.max(msg["authorFeelingsPSP"]["ALL"]) > 0.2:
+	if np.max(msg["authorFeelingsPSP"]["ALL"]) > 0.2 and len(msgHistory) >= 2:
 		parentAuthor = msgHistory[-2]["author"]
 		parentFeelingTxt = msg["authorFeelings"][parentAuthor]["responseText"]
 		fullDiffuse = ""
 		fullDiffuse += "\n" + qBlock(f"**{parentAuthor.name}**: {parentFeelingTxt}")
-		diffuse = respectfulDiffuse(msgHistory)
+		diffuse = await respectfulDiffuse(msgHistory)
 		fullDiffuse += "\n\n*" + diffuse["responseText"] + "*"
 		msg["fullDiffuse"] = fullDiffuse
 		msg["diffuse"] = diffuse
@@ -333,7 +345,7 @@ async def s(ctx, msg: str):
 	# ctx=fakeCtx(msg["author"])
 	# msg = msgHistory[-1]
 	msg = {"untransformedMsg": msg, "author": ctx.author}
-	processMessage(msg, msgHistoryDiscordBot)
+	await processMessage(msg, msgHistoryDiscordBot)
 
 	debugChannel = bot.get_channel(1003782764484632596)
 
@@ -418,47 +430,50 @@ async def testExchange(inlines):
 		msgTxt = line[2:]
 		ctx = fakeCtx(fakeAuthor(authName))
 		msg = {"untransformedMsg": msgTxt, "author": ctx.author}
-		processMessage(msg, msgHistory)
+		await processMessage(msg, msgHistory)
 	debugViewMsgHistory(msgHistory)
 
 #%%#
 
-await testExchange("""
+testConvos = []
+testConvos.append(testExchange("""
 A: so, anyone see the new marvel movie?
 B: yeah, Endgame was terrible.
-""")
+"""))
 
-await testExchange("""
+testConvos.append(testExchange("""
+A: ... To Be Continued. Please join us in creating lore and experimenting with new tools for storytelling & collaboration! http://discord.gg/XfBPAxv
+B: This project was literally a soft rug pull
+"""))
+
+testConvos.append(testExchange("""
 A: My company Pipedream just raised $1.6M pre-seed from @balajis to build the future of 15 min delivery. It’s like GoPuff meets Elon's The Boring Company. And we're doing it with robots racing through 12 inch pipes underground.
 B: Great name for a failed enterprise!
 C: Eat my asshole @A. It’s the only hole I’ll ever let you near.
-""")
+"""))
 
-await testExchange("""
-A: ... To Be Continued. Please join us in creating lore and experimenting with new tools for storytelling & collaboration! http://discord.gg/XfBPAxv
-B: This project was literally a soft rug pull
-""")
-
-await testExchange("""
+testConvos.append(testExchange("""
 A: yo, how is everyone doing?
 B: not much, just working on some code
 A: haha, doubt it’ll run
-""")
+"""))
 
-await testExchange("""
+testConvos.append(testExchange("""
 A: hi
 B: shutup
 B: hey, sorry was just joking. say that to everyone haha
 A: oh ok no worries
-""")
+"""))
 
-await testExchange("""
+testConvos.append(testExchange("""
 A: There will be an NFT of this image on June 10th. I know some take a dim view of NFTs, and I share a lot of those misgivings: this use of blockchain is still early. In 5-10 years crypto will inevitably evolve a stronger foundation. This would follow the pattern of all innovations.
 B: Crypto will never "evolve a stronger foundation", it will always require insane amounts of energy, burning our planet. It's a pyramid scheme, not an "innovation". Why would 5-10 years matter? They've been around for twice that long, and still of no use. Sad to see you pushing it.
 C: For fuck's sake, crypto is as innovative as juicero.
-""")
+"""))
 
-await testExchange("""
+testConvos.append(testExchange("""
 A: Last night one of the AI developers behind that project that was ripping off living artists’ styles sent me a bunch of DMs(mostly omitted for length). He blocked me immediately after I responded and called me a moralist because I care about artists rights lol. The image sets these AI are trained on need to be public facing and opt in only. The onus needs to be on the AI devs to ethically source the images they train them with, not on the artists to keep cutting the head off the endless AI hydra appropriating our work.
 B: You keep, consistently, publishing disinformation to a significant platform about this software, how it works, and the people involved in it. It's clearly not accidental - basic fact checking is not difficult. What do you gain from this hysteria you've whipped up?
-""")
+"""))
+
+await asyncio.gather(*testConvos)
