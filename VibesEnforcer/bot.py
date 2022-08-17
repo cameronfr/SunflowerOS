@@ -1,4 +1,5 @@
 #%%#
+from cgitb import text
 import discord
 # from googleapiclient import discovery
 from aiogoogle import Aiogoogle
@@ -128,17 +129,11 @@ authorToName = lambda a: a.name + str(a.id)[:3]
 
 # Predict feeling of author. Also feeling of other participants, and of readers:
 # Prime for response of form "I [felt ...]", where the "I" is give
-async def predictFeelingGPT(messages, author):
-	#How this message makes barney129 feel, and why:
-	#How this message makes barney129 feel, and why [usually one word]
-	# Message from barney129, detailing their feelings:
-	# Message from barney129, detailing how the message made them feel: [makes output more specific to last message]
-	# Explanation of barney129's feelings, and why:
+async def predictFeelingGPTv1(messages, author):
 	profilePrompt = makeProfilePrompt(author)
 	historyPrompt = makeHistoryPrompt(messages[-5:])
 
 	# Make full prompt with newest message
-	msg = messages[-1]
 	authorString = authorToName(author)
 	if messages[-1]["author"].id != author.id:
 		# Predict how latest message will affect others
@@ -160,6 +155,23 @@ async def predictFeelingGPT(messages, author):
 	# Feed into gpt-3
 	prediction = await getCompletionOAI(prompt=fullPrompt, temperature=0.4)
 	prediction["responseText"] = "I feel " + prediction["responseText"]
+	return prediction
+
+# Better prompting -- prompt explicitly tries to get completion that engenders empathy
+async def predictFeelingGPTv2(messages, author):
+	historyPrompt = makeHistoryPrompt(messages[-5:])
+
+	# Make full prompt with newest message
+	# author = messages[-2]["author"]
+	authorString = authorToName(author)
+	fullPrompt = textwrap.dedent(f"""
+	The following is an exchange between multiple polarized parties. The last message is from another person C, who explains why {authorString} might be feeling the way they do.
+	""").strip() + "\n\n" + historyPrompt + "\n\n" + textwrap.dedent(f"""
+	Message from C:
+	""").strip()
+
+	prediction = await getCompletionOAI(prompt=fullPrompt, temperature=0.7)
+	# prediction["responseText"]
 	return prediction
 
 async def predictFeelingPSP(messages):
@@ -285,7 +297,7 @@ async def processMessage(msg, msgHistory):
 	msgHistory.append(msg)
 
 	recentAuthors = {m["author"].id: m["author"] for m in msgHistory[-20:]}
-	authorFeelings = {a: await predictFeelingGPT(msgHistory, a) for a in recentAuthors.values()}
+	authorFeelings = {a: await predictFeelingGPTv2(msgHistory, a) for a in recentAuthors.values()}
 	authorFeelingsPSP = await predictFeelingPSP(msgHistory)
 	msg["authorFeelings"] = authorFeelings
 	msg["authorFeelingsPSP"] = authorFeelingsPSP
@@ -431,6 +443,7 @@ async def testExchange(inlines):
 		ctx = fakeCtx(fakeAuthor(authName))
 		msg = {"untransformedMsg": msgTxt, "author": ctx.author}
 		await processMessage(msg, msgHistory)
+	msgHistory[-1]["diffuse"]
 	debugViewMsgHistory(msgHistory)
 
 #%%#
@@ -477,3 +490,5 @@ B: You keep, consistently, publishing disinformation to a significant platform a
 """))
 
 await asyncio.gather(*testConvos)
+
+# %%
