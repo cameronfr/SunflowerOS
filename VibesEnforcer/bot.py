@@ -10,7 +10,7 @@ import requests
 import re
 import json
 import textwrap
-from html import unescape
+from html import unescape, escape
 import numpy as np
 import os
 import markdown
@@ -97,7 +97,9 @@ def getCompletionOAI(*args, **kwargs):
 	promptDebug += str(kwargs["prompt"])
 	if "suffix" in kwargs:
 		promptDebug += "[INSERT]" + str(kwargs["suffix"])
-	promptDebug += "\n" + "--ARGS:" + str(combinedArgs)
+	promptDebug+= "\n" + "--ARGS:" + str({i:combinedArgs[i] for i in combinedArgs if i!='prompt'})
+	fullArgs = str(combinedArgs)
+
 	# print("---------- Running Prompt ----------")
 	# print(kwargs["prompt"])
 	# if "suffix" in kwargs:
@@ -106,7 +108,7 @@ def getCompletionOAI(*args, **kwargs):
 	# print("--RESP:", responseText)
 	# print("---------- ----------- ----------")
 
-	prediction = {"promptDebug": promptDebug, "responseText": responseText}
+	prediction = {"promptDebug": promptDebug, "responseText": responseText, "fullArgs": fullArgs}
 
 	return prediction
 
@@ -284,6 +286,7 @@ def processMessage(msg, msgHistory):
 		diffuse = respectfulDiffuse(msgHistory)
 		fullDiffuse += "\n\n*" + diffuse["responseText"] + "*"
 		msg["fullDiffuse"] = fullDiffuse
+		msg["diffuse"] = diffuse
 
 def debugViewMsgHistory(msgHistory):
 
@@ -291,26 +294,34 @@ def debugViewMsgHistory(msgHistory):
 	html = "<style>.item {border: 1px solid black; padding: 10px}</style>"
 	html += "<div style=" + "\"display: grid; grid-template-columns: 60px repeat(4, 150px) 250px; grid-gap: 0px;\"" + ">"
 
-	# Table Header
-	html += "<div class='item'> <b>Author</b> </div>"
-	html += "<div class='item'> <b>Message</b> </div>"
-	html += "<div class='item'> <b>Transformed Message</b> </div>"
-	html += "<div class='item'> <b>Feeling</b> </div>"
-	html += "<div class='item'> <b>Feeling PSP</b> </div>"
-	html += "<div class='item'> <b>Full Diffuse</b> </div>"
+	html += f"""
+		<div class="item">Author</div>
+		<div class="item">Message</div>
+		<div class="item">Transformed Message</div>
+		<div class="item">Feeling PSP</div>
+		<div class="item">Feeling</div>
+		<div class="item">Full Diffuse</div>
+	"""
 
 	for msg in msgHistory:
-		html += "<div class='item'> " + authorToName(msg["author"]) + " </div>"
-		html += "<div class='item'> " + msg["untransformedMsg"] + " </div>"
-		html += "<div class='item'> " + msg["transformedMsg"]["responseText"] + " </div>"
-		html += "<div class='item'> "
-		for feeling in msg["authorFeelings"]:
-			# format of <b>Author</b>: Feeling
-			html += "<div class='item'> " + "<b>" + authorToName(feeling) + "</b>" + ": " + msg["authorFeelings"][feeling]["responseText"] + " </div>"
-		html += "</div>"
-		html += "<div class='item'> " + str(msg["authorFeelingsPSP"]["ALL"]) + " </div>"
+		feelingsDiv = "<div class='item'>"
+		for author in msg["authorFeelings"]:
+			feeling = msg["authorFeelings"][author]
+			# when user hovers, shows prompt as tooltip
+			feelingsDiv += f"""<div class='item' title="{escape(feeling["promptDebug"])}"><b>{author.name}</b>: {feeling["responseText"]}</div>"""
+		feelingsDiv += "</div>"
+
 		fullDiffuse = msg["fullDiffuse"] if "fullDiffuse" in msg else ""
-		html += "<div class='item'> " + markdown.markdown(fullDiffuse) + " </div>"
+		fullDiffuseTooltip = msg["diffuse"]["promptDebug"] if "fullDiffuse" in msg else ""
+
+		html += f"""
+			<div class="item">{msg["author"].name}</div>
+			<div class="item">{msg["untransformedMsg"]}</div>
+			<div class="item" title="{escape(msg["transformedMsg"]["promptDebug"])}">{msg["transformedMsg"]["responseText"]}</div>
+			<div class="item">{msg["authorFeelingsPSP"]["ALL"]}</div>
+			{feelingsDiv}
+			<div class="item" title="{fullDiffuseTooltip}">{markdown.markdown(fullDiffuse)}</div>
+		"""
 	display(HTML(html))
 
 msgHistoryDiscordBot = []
@@ -396,6 +407,10 @@ task = asyncio.get_event_loop().create_task(bot.start(secrets["discordApiKey"]))
 # A function that outputs an html table with IPython.display.HTML:
 
 async def testExchange(inlines):
+	# inlines = """
+	# A: so, anyone see the new marvel movie?
+	# B: yeah, Endgame was terrible.
+	# """
 	msgHistory = []
 	lines = inlines.strip().split("\n")
 	for line in lines:
