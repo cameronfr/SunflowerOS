@@ -11,6 +11,7 @@ import json
 import textwrap
 from html import unescape
 import numpy as np
+import os
 
 class DictToObject(object):
 	def __init__(self, d):
@@ -20,13 +21,15 @@ class DictToObject(object):
 			else:
 			   setattr(self, a, obj(b) if isinstance(b, dict) else b)
 
-openai.api_key ="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"
+os.chdir(os.path.expanduser("~/Documents/Projects/Sunflower/SunflowerOS/Repo/VibesEnforcer"))
 
-perspectiveApiKey = "AIzaSyBnEpS9yEQbaFEePFLF7E70YyN3EUHsWG0"
+secrets = json.load(open("secrets.json", "rb"))
+openai.api_key = secrets["openaiApiKey"]
+
 perspectiveClient = discovery.build(
   "commentanalyzer",
   "v1alpha1",
-  developerKey=perspectiveApiKey,
+  developerKey=secrets["perspectiveApiKey"],
   discoveryServiceUrl="https://commentanalyzer.googleapis.com/$discovery/rest?version=v1alpha1",
   static_discovery=False,
 )
@@ -345,7 +348,7 @@ def fakeMsg(auth, msgTxt):
 #     await message.delete()
 #     processMessage(message.author, message.content)
 
-task = asyncio.get_event_loop().create_task(bot.start("MTAwMzczODAyNTYzMDYyOTkxOQ.GbyPZq.awvV1sxbr7EqBV488mVxReF3kPljY0UEbiHJJk"))
+task = asyncio.get_event_loop().create_task(bot.start(secrets["discordApiKey"]))
 
 async def testExchange(inlines):
 	msgHistory.clear()
