@@ -170,9 +170,42 @@ async def predictFeelingGPTv2(messages, author):
 	Message from C:
 	""").strip()
 
-	prediction = await getCompletionOAI(prompt=fullPrompt, temperature=0.7)
+	prediction = await getCompletionOAI(prompt=fullPrompt, temperature=0.7, best_of=1)
 	# prediction["responseText"]
 	return prediction
+
+async def predictFeelingGPTv3(messages, author1, author2):
+	# author1 = messages[0]["author"]
+	# author2 = messages[-1]["author"]
+	historyPrompt = makeHistoryPrompt(messages[-5:])
+
+	author1String = authorToName(author1)
+	author2String = authorToName(author2)
+	fullPrompt = textwrap.dedent(f"""
+	In this conversation, {author1String} is vulnerable and explains to {author2String} how they really feel and why.""").strip() + "\n\n" + historyPrompt + "\n\n" + textwrap.dedent(f"""
+	Message from {author1String} detailing their feelings:""").strip() + "\n\n" + "I feel"
+
+	prediction = await getCompletionOAI(prompt=fullPrompt, temperature=0.7)
+	prediction["responseText"] = "I feel " + prediction["responseText"]
+	prediction["responseText"]
+	return prediction
+
+async def predictFeelingGPTv4(messages, author1, author2):
+	# author1 = messages[0]["author"]
+	# author2 = messages[-1]["author"]
+	historyPrompt = makeHistoryPrompt(messages[-5:])
+
+	author1String = authorToName(author1)
+	author2String = authorToName(author2)
+	fullPrompt = textwrap.dedent(f"""
+	In this conversation, {author1String} is vulnerable and explains to {author2String} how they really feel and why.""").strip() + "\n\n" + historyPrompt + "\n\n" + textwrap.dedent(f"""
+	Message from A675 detailing how B944's message made them feel, and why:""").strip() + "\n\n" + "I feel"
+
+	prediction = await getCompletionOAI(prompt=fullPrompt, temperature=0.7)
+	prediction["responseText"] = "I feel " + prediction["responseText"]
+	prediction["responseText"]
+	return prediction
+
 
 async def predictFeelingPSP(messages):
 	# [Toxicity Detection can be Sensitive to the Conversational Context]: concat parent post context to improve MAE (fig 5)
@@ -290,62 +323,90 @@ async def transformToRespectful(messages):
 def qBlock(text):
 	return textwrap.indent(text, "> ", lambda line: True)
 
-async def processMessage(msg, msgHistory):
-	transformedMsg = await transformToRespectful(msgHistory + [msg])
+async def processMessages(msgHistory):
+	author1 = msgHistory[0]["author"]
+	replier1 = msgHistory[-1]["author"]
+	msg = msgHistory[-1]
+	msg["authorFeelingsGPTv3_1"] = {author1: await predictFeelingGPTv3(msgHistory, author1, replier1)} 
+	msg["authorFeelingsGPTv3_2"] = {author1: await predictFeelingGPTv3(msgHistory, author1, replier1)} 
+	msg["authorFeelingsGPTv3_3"] = {author1: await predictFeelingGPTv3(msgHistory, author1, replier1)} 
 
-	msg["transformedMsg"] = transformedMsg
-	msgHistory.append(msg)
+	# for msg in msgHistory:
+	# 	# Predict feeling for author of current
+	# 	author = msg["author"]
+	# 	msg["authorFeelingsGPTv2"] = {author: await predictFeelingGPTv2(msgHistory, author)}
 
-	recentAuthors = {m["author"].id: m["author"] for m in msgHistory[-20:]}
-	authorFeelings = {a: await predictFeelingGPTv2(msgHistory, a) for a in recentAuthors.values()}
-	authorFeelingsPSP = await predictFeelingPSP(msgHistory)
-	msg["authorFeelings"] = authorFeelings
-	msg["authorFeelingsPSP"] = authorFeelingsPSP
 
-	if np.max(msg["authorFeelingsPSP"]["ALL"]) > 0.2 and len(msgHistory) >= 2:
-		parentAuthor = msgHistory[-2]["author"]
-		parentFeelingTxt = msg["authorFeelings"][parentAuthor]["responseText"]
-		fullDiffuse = ""
-		fullDiffuse += "\n" + qBlock(f"**{parentAuthor.name}**: {parentFeelingTxt}")
-		diffuse = await respectfulDiffuse(msgHistory)
-		fullDiffuse += "\n\n*" + diffuse["responseText"] + "*"
-		msg["fullDiffuse"] = fullDiffuse
-		msg["diffuse"] = diffuse
+	# transformedMsg = await transformToRespectful(msgHistory + [msg])
 
-def debugViewMsgHistory(msgHistory):
+	# msg["transformedMsg"] = transformedMsg
 
+	# recentAuthors = {m["author"].id: m["author"] for m in msgHistory[-20:]}
+	# authorFeelings = {a: await predictFeelingGPTv2(msgHistory, a) for a in recentAuthors.values()}
+	# authorFeelingsPSP = await predictFeelingPSP(msgHistory)
+	# authorFeelings = {msgH}
+	# msg["authorFeelings"] = authorFeelings
+	# msg["authorFeelingsPSP"] = authorFeelingsPSP
+
+	# if np.max(msg["authorFeelingsPSP"]["ALL"]) > 0.2 and len(msgHistory) >= 2:
+	# 	parentAuthor = msgHistory[-2]["author"]
+	# 	parentFeelingTxt = msg["authorFeelings"][parentAuthor]["responseText"]
+	# 	fullDiffuse = ""
+	# 	fullDiffuse += "\n" + qBlock(f"**{parentAuthor.name}**: {parentFeelingTxt}")
+	# 	diffuse = await respectfulDiffuse(msgHistory)
+	# 	fullDiffuse += "\n\n*" + diffuse["responseText"] + "*"
+	# 	msg["fullDiffuse"] = fullDiffuse
+	# 	msg["diffuse"] = diffuse
+
+def debugViewMsgHistory(msgHistory, keys):
 	# Takes msgHistory and outputs and html css grid table of the messages
-	html = "<style>.item {border: 1px solid black; padding: 10px}</style>"
-	html += "<div style=" + "\"display: grid; grid-template-columns: 60px repeat(4, 150px) 250px; grid-gap: 0px;\"" + ">"
+	html = """
+		<style>
+		.item {border: 1px solid black; padding: 10px}
+		.jp-OutputArea-child {display: block; flex-direction: column}
+		</style>
+	"""
+	html += "<div style=" + f"""'display: grid; grid-template-columns: 60px repeat({1+len(keys)}, 150px); grid-gap: 0px;'""" + ">"
 
 	html += f"""
 		<div class="item">Author</div>
 		<div class="item">Message</div>
-		<div class="item">Transformed Message</div>
-		<div class="item">Feeling PSP</div>
-		<div class="item">Feeling</div>
-		<div class="item">Full Diffuse</div>
 	"""
-
+	for key in keys:
+		html += """<div class="item">""" + key + "</div>"
+	
 	for msg in msgHistory:
-		feelingsDiv = "<div class='item'>"
-		for author in msg["authorFeelings"]:
-			feeling = msg["authorFeelings"][author]
-			# when user hovers, shows prompt as tooltip
-			feelingsDiv += f"""<div class='item' title="{escape(feeling["promptDebug"])}"><b>{author.name}</b>: {feeling["responseText"]}</div>"""
-		feelingsDiv += "</div>"
-
-		fullDiffuse = msg["fullDiffuse"] if "fullDiffuse" in msg else ""
-		fullDiffuseTooltip = msg["diffuse"]["promptDebug"] if "fullDiffuse" in msg else ""
-
 		html += f"""
 			<div class="item">{msg["author"].name}</div>
 			<div class="item">{msg["untransformedMsg"]}</div>
-			<div class="item" title="{escape(msg["transformedMsg"]["promptDebug"])}">{msg["transformedMsg"]["responseText"]}</div>
-			<div class="item">{msg["authorFeelingsPSP"]["ALL"]}</div>
-			{feelingsDiv}
-			<div class="item" title="{fullDiffuseTooltip}">{markdown.markdown(fullDiffuse)}</div>
 		"""
+		for key in keys:
+			divs = []
+			if key not in msg:
+				divs.append("""<div class="item"></div>""")
+			elif isinstance(msg[key], dict) and hasattr(list(msg[key].keys())[0], "name"):
+				# Per Author
+				div = "<div class='item'>"
+				for author in msg[key]:
+					feeling = msg[key][author]
+					# when user hovers, shows prompt as tooltip
+					div += f"""
+						<div class='item' title='{escape(feeling["promptDebug"])}'><b>{author.name}</b>: {feeling["responseText"]}</div>
+					"""
+				div += "</div>"
+				divs.append(div)
+			elif "responseText" in msg[key]:
+				# Single Completion
+				divs.append(f"""
+					<div class="item" title='{escape(msg[key]["promptDebug"])}'>{msg[key]["responseText"]}</div>
+				""")
+			else:
+				divs.append(f"""
+					<div class="item">{msg[key]}</div>
+				""")
+			for div in divs:
+				html += div
+
 	display(HTML(html))
 
 msgHistoryDiscordBot = []
@@ -428,8 +489,6 @@ def fakeMsg(auth, msgTxt):
 
 task = asyncio.get_event_loop().create_task(bot.start(secrets["discordApiKey"]))
 
-# A function that outputs an html table with IPython.display.HTML:
-
 async def testExchange(inlines):
 	# inlines = """
 	# A: so, anyone see the new marvel movie?
@@ -439,12 +498,12 @@ async def testExchange(inlines):
 	lines = inlines.strip().split("\n")
 	for line in lines:
 		authName = line[:1]
-		msgTxt = line[2:]
+		msgTxt = line[3:]
 		ctx = fakeCtx(fakeAuthor(authName))
 		msg = {"untransformedMsg": msgTxt, "author": ctx.author}
-		await processMessage(msg, msgHistory)
-	msgHistory[-1]["diffuse"]
-	debugViewMsgHistory(msgHistory)
+		msgHistory.append(msg)
+	await processMessages(msgHistory)
+	debugViewMsgHistory(msgHistory, ["authorFeelingsGPTv3_1", "authorFeelingsGPTv3_2", "authorFeelingsGPTv3_3"])
 
 #%%#
 
@@ -471,22 +530,66 @@ B: not much, just working on some code
 A: haha, doubt it’ll run
 """))
 
-testConvos.append(testExchange("""
-A: hi
-B: shutup
-B: hey, sorry was just joking. say that to everyone haha
-A: oh ok no worries
-"""))
+# testConvos.append(testExchange("""
+# A: hi
+# B: shutup
+# B: hey, sorry was just joking. say that to everyone haha
+# A: oh ok no worries
+# """))
 
 testConvos.append(testExchange("""
 A: There will be an NFT of this image on June 10th. I know some take a dim view of NFTs, and I share a lot of those misgivings: this use of blockchain is still early. In 5-10 years crypto will inevitably evolve a stronger foundation. This would follow the pattern of all innovations.
 B: Crypto will never "evolve a stronger foundation", it will always require insane amounts of energy, burning our planet. It's a pyramid scheme, not an "innovation". Why would 5-10 years matter? They've been around for twice that long, and still of no use. Sad to see you pushing it.
 C: For fuck's sake, crypto is as innovative as juicero.
+D: Man that's a bummer to see you buy into the grift too. Not surprising I guess, but disappointing.
+"""))
+
+testConvos.append(testExchange("""
+A: There will be an NFT of this image on June 10th. I know some take a dim view of NFTs, and I share a lot of those misgivings: this use of blockchain is still early. In 5-10 years crypto will inevitably evolve a stronger foundation. This would follow the pattern of all innovations.
+B: Man that's a bummer to see you buy into the grift too. Not surprising I guess, but disappointing.
 """))
 
 testConvos.append(testExchange("""
 A: Last night one of the AI developers behind that project that was ripping off living artists’ styles sent me a bunch of DMs(mostly omitted for length). He blocked me immediately after I responded and called me a moralist because I care about artists rights lol. The image sets these AI are trained on need to be public facing and opt in only. The onus needs to be on the AI devs to ethically source the images they train them with, not on the artists to keep cutting the head off the endless AI hydra appropriating our work.
 B: You keep, consistently, publishing disinformation to a significant platform about this software, how it works, and the people involved in it. It's clearly not accidental - basic fact checking is not difficult. What do you gain from this hysteria you've whipped up?
+"""))
+
+testConvos.append(testExchange("""
+A: Last night one of the AI developers behind that project that was ripping off living artists’ styles sent me a bunch of DMs(mostly omitted for length). He blocked me immediately after I responded and called me a moralist because I care about artists rights lol. The image sets these AI are trained on need to be public facing and opt in only. The onus needs to be on the AI devs to ethically source the images they train them with, not on the artists to keep cutting the head off the endless AI hydra appropriating our work.
+B: he didnt exactly give an explanation of what he actually *does* as far as i can tell. sure "developer" wasn't the right word, but like RJ said in that thread, there wasnt really an appropriate term. like what? "dude who feeds things into AI and see what it does"?
+C: he didnt exactly give an explanation of what he actually *does* as far as i can tell. sure "developer" wasn't the right word, but like RJ said in that thread, there wasnt really an appropriate term. like what? "dude who feeds things into AI and see what it does"?
+"""))
+
+testConvos.append(testExchange("""
+A: Last night one of the AI developers behind that project that was ripping off living artists’ styles sent me a bunch of DMs(mostly omitted for length). He blocked me immediately after I responded and called me a moralist because I care about artists rights lol. The image sets these AI are trained on need to be public facing and opt in only. The onus needs to be on the AI devs to ethically source the images they train them with, not on the artists to keep cutting the head off the endless AI hydra appropriating our work.
+B: oh are morals bad now
+C: Morals are always getting in the way of my desired capitalist hellscape
+"""))
+
+testConvos.append(testExchange("""
+A: I am asking people on AI discords why AI is needed. Interestingly, one response seems to be jealously or even anger that artists earned a skill others don't have
+B: Man this attitude sucks so much. Part of being creative is going through the struggle of actually creating. If you microwave a meal, you arent a cook.
+C: Microwaving a meal doesn’t make you a cook, but it still makes food. Why should it matter how much struggle is involved in creating something? Would you intentionally not use the undo button so that all your brushstrokes are permanent?
+D: Its not about struggle its about intent. A true AI would have that intent, it would BE a person with the capability to actually use the data it has within it thoughtfully, but this isn't that. This isn't expression, it's regurgitation, and most importantly it's built on theft.
+"""))
+
+testConvos.append(testExchange("""
+A: People should be able to give themselves eye exams at home and then buy prescription eyeglasses on the internet from generic suppliers.
+B: I don’t want to share the road with people who need vision correction but haven’t been given an eye exam by a professional.
+"""))
+
+testConvos.append(testExchange("""
+A: The case for intellectual creation in the making of an AI image using MidJourney. Part of the work is in the prompt, it takes time to know what to ask. Here's the prompt "futuristic city under a dome digital art deviantart high detail high definition octane render"
+B: A hard day at work. One second: [google link to search of futuristic city under a dome]. And with this I have finished my work for today, I am going to sleep.
+"""))
+
+# This thread from Simon Stalenhag really hurts me (and I'm sure others too, in the same visceral way). How can it be diffused -- is the only way to block / hide the thread? I am not enlightened.
+testConvos.append(testExchange("""
+A: If you wonder why I'm not as active on here anymore, below is what my social media experience is mostly these days (and I do use the mute feature). Thanks and love to all of you who support me but I can't help it - I truly hate the world we now live in with every cell of my body.
+A: And while I'm here: I really hesitate to say anything about the legal implications of AI art but let me just say I have always felt (and stated so here in the past) that taking ideas from other artists is a cornerstone of a living, artistic culture. It's the impetus for new art.
+A: AI-art is really a new type of problem. I personally don't feel overly threatened by what it produces, because it is so obviously derivative. But I no longer rely on freelance work. And back when I did, I hated it specifically beause most clients, long before ai was a thing.
+A: What I don't like about ai-tech is not that it can produce brand new 70s rock hits like "Keep On Glowing, You Mad Jewel" by Fink Ployd, but how it reveals that that kind of derivative, generated goo is what or new tech lords are hoping to feed us in their vision of the future.
+A: Anyway, I think ai-art, just like nfts, is a technology that just amplify all the shit I hate with being an artist in this feudal capitalist dystopia where every promising new tool always end up in the hands of the least imaginative and most exploitative and unscrupulous people.
 """))
 
 await asyncio.gather(*testConvos)
