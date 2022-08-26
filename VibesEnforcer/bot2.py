@@ -9,6 +9,7 @@ import numpy as np
 import os
 from IPython.display import display, HTML
 import aiohttp
+import snscrape.modules.twitter as sntwitter
 
 class DictToObject(object):
     def __init__(self, d):
@@ -33,7 +34,7 @@ async def getCompletionOAI(*args, **kwargs):
         #engine="text-davinci-002",
         model="text-davinci-002",
         temperature=0.7,
-        max_tokens=60,
+        max_tokens=120,
         top_p=1,
         frequency_penalty=0,
         presence_penalty=0,
@@ -64,9 +65,6 @@ async def getCompletionOAI(*args, **kwargs):
 
     return prediction
 
-# %%
-
-import snscrape.modules.twitter as sntwitter
 scraper = sntwitter.TwitterTweetScraper(tweetId=1553200773164462080)
 out = list(scraper.get_items())
 
@@ -87,10 +85,26 @@ async def reactToSignalAgreeUrge(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1M
     response = await getCompletionOAI(prompt=prompt, temperature=0.7)
     return response
 
+async def reactToBragging(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message):
+    prompt = textwrap.dedent(f"""
+    In their second message, {a1Name} is much more humble, and is vulnerable in explaining why they sent the first message.
+    \t
+    {a1Name}'s Profile:
+    Follower Count: {a1FollowerCt}, Following Count: {a1FollowingCt}
+    Bio: {a1Bio}
+    \t
+    Message from {a1Name}: 
+    {a1Message}
+    \t
+    Message from {a1Name}: 
+    """).strip() 
+    response = await getCompletionOAI(prompt=prompt, temperature=0.7)
+    return response
+
 async def reactToDoom(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message):
 
     prompt = textwrap.dedent(f"""
-    The following is a message from fchollet. His first message is pessimistic, but his second message adds onto the first and is very optimistic and inspiring.
+    The following is a message from {a1Name}. His first message is pessimistic, but his second message adds onto the first and is very optimistic and inspiring.
     \t
     {a1Name}'s Profile:
     Follower Count: {a1FollowerCt}, Following Count: {a1FollowingCt}
@@ -105,10 +119,111 @@ async def reactToDoom(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message):
     response = await getCompletionOAI(prompt=prompt, temperature=0.7)
     return response
 
+async def reactToExcitementFOMO(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message):
+
+    print(a1Message)
+    prompt = textwrap.dedent(f"""
+    # The following is a message from {a1Name}. In his second message, {a1Name} encourages the reader to stay focused on what they are working on, and assures them that they will know when to use the hyped thing in the first message.
+    \t
+    {a1Name}'s Profile:
+    Follower Count: {a1FollowerCt}, Following Count: {a1FollowingCt}
+    Bio: {a1Bio}
+    \t
+    Message from {a1Name}: 
+    {a1Message}
+    \t
+    Message from {a1Name}:
+    """).strip() 
+    response = await getCompletionOAI(prompt=prompt, temperature=0.7)
+    print("\n" + response["responseText"])
+
+    return response
+
+async def reactToPolarizeAgree(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message, a2Name, a2Bio, a2FollowerCt, a2FollowingCt, a2Message):
+
+    prompt1 = textwrap.dedent(f"""
+    In this conversation, {a2Name} apologizes, is vulnerable and explains to {a1Name} how they really feel and why.
+    \t
+    Message from {a2Name}:
+    {a2Message}
+    \t
+    Message from {a1Name}:
+    {a1Message}
+    \t
+    Message from {a2Name} detailing their feelings:
+    """).strip() 
+    response1 = await getCompletionOAI(prompt=prompt1, temperature=0.2)
+    a2Feeling = response1["responseText"]
+
+    prompt2 = textwrap.dedent(f"""
+    In this conversation, {a1Name} apologizes, is vulnerable, and explains to {a2Name} how they really feel and why.
+    \t
+    Message from {a2Name}:
+    {a2Message}
+    \t
+    Message from {a1Name}:
+    {a1Message}
+    \t
+    Message from {a2Name}:
+    {a2Feeling.replace(chr(10), "")}
+    \t
+    Reply from {a1Name}, detailing their feelings:
+    """).strip()
+    # print(prompt2)
+    response2 = await getCompletionOAI(prompt=prompt2, temperature=0.2)
+    a1Feeling = response2["responseText"]
+    # print(a1Feeling)
+
+    return [response1, response2]
+
+
+# "why they wrote what they wrote" works well when already agree with a2name (i.e. disagree with a1Name)
+# When there's a dunk, the person who dunked is the first person, and the person who got dunked on is the second person, and the reader agrees with the target and feels attacked.
+async def reactToPolarizeDisagree(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message, a2Name, a2Bio, a2FollowerCt, a2FollowingCt, a2Message):
+
+    prompt1 = textwrap.dedent(f"""
+    In this conversation, {a2Name} apologizes, is vulnerable and explains to {a1Name} why they wrote what they wrote.
+    \t
+    Message from {a2Name}:
+    {a2Message}
+    \t
+    Message from {a1Name}:
+    {a1Message}
+    \t
+    Message from {a2Name} detailing their feelings and explaining why they wrote what they wrote:
+    """).strip() 
+    # print(prompt)
+    response1 = await getCompletionOAI(prompt=prompt1, temperature=0.2)
+    a2Feeling = response1["responseText"]
+    # print(response["responseText"])
+
+    prompt2 = textwrap.dedent(f"""
+    In this conversation, {a1Name} apologizes, is vulnerable, and explains to {a2Name} how they really feel and why.
+    \t
+    Message from {a2Name}:
+    {a2Message}
+    \t
+    Message from {a1Name}:
+    {a1Message}
+    \t
+    Message from {a2Name}:
+    {a2Feeling.replace(chr(10), "")}
+    \t
+    Reply from {a1Name}, detailing their feelings:
+    """).strip()
+    # print(prompt2)
+    response2 = await getCompletionOAI(prompt=prompt2, temperature=0.2)
+    a1Feeling = response2["responseText"]
+    # print(a2Feeling)
+
+    return [response1, response2]
+
 async def classifyTweet(url):
-    url = "https://twitter.com/dystopiabreaker/status/1553200773164462080" #dystopiabreaker
-    # url = "https://twitter.com/fchollet/status/976933782367293440" #fchollet
-    # url = "https://twitter.com/hasanthehun/status/1562554743846604800"
+    # url = "https://twitter.com/dystopiabreaker/status/1553200773164462080" #superior
+    # url = "https://twitter.com/fchollet/status/976933782367293440" #doom
+    url = "https://twitter.com/hasanthehun/status/1562554743846604800" #argument
+    # url = "https://twitter.com/Alariko_/status/1562448991086051332" #bragging
+    # url = "https://twitter.com/makeitrad1/status/1562815837475467264" #hype/fomo
 
 
     tweetId = int(url.split("/")[-1])
@@ -119,25 +234,56 @@ async def classifyTweet(url):
     a1FollowerCt = tweetInfo.user.followersCount
     a1FollowingCt = tweetInfo.user.friendsCount
     a1Message = tweetInfo.content
+    if tweetInfo.card is not None:
+        a1Message += f""" [CARD: {tweetInfo.card.siteUser.displayname} | {tweetInfo.card.title} | {tweetInfo.card.description}]"""
+
+    if tweetInfo.quotedTweet is not None:
+        a2Name = tweetInfo.quotedTweet.user.username
+        a2Bio = tweetInfo.quotedTweet.user.description
+        a2FollowerCt = tweetInfo.quotedTweet.user.followersCount
+        a2FollowingCt = tweetInfo.quotedTweet.user.friendsCount
+        a2Message = tweetInfo.quotedTweet.content
+        if tweetInfo.quotedTweet.card is not None:
+            a2Message += f""" [CARD: {tweetInfo.quotedTweet.card.siteUser.displayname} | {tweetInfo.quotedTweet.card.title} | {tweetInfo.quotedTweet.card.description}]"""
     
-    # tweetInfo.quotedTweet
     classificationOutput = await classifyWithPrompt(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message)
     print(f"""{a1Name}: {a1Message}\n\n{classificationOutput["responseText"]}""")
-
     # print(classificationOutput["promptDebug"])
 
     classString = classificationOutput["responseText"].lower()
+
+    # TODO: deal with cases that depend on reader's beliefs that model predicts
+    classString = classString.split("\n")[0]
+
+
     if len(classString.split("\n")) == 1:
         if "doom" in classString:
             print("*Using doom action path*\n")
             thoughtGuideOutput = await reactToDoom(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message)
             thoughtGuide = thoughtGuideOutput["responseText"]
-            print(thoughtGuide)
         elif "superior" in classString or "must-share" in classString:
             print("*Using superior / shareurge action path*\n")
             thoughtGuideOutput = await reactToSignalAgreeUrge(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message)
             thoughtGuide = thoughtGuideOutput["responseText"]
-            print(thoughtGuide)
+        elif "bragging" in classString:
+            print("*Using bragging action path*\n")
+            thoughtGuideOutput = await reactToBragging(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message)
+            thoughtGuide = thoughtGuideOutput["responseText"]
+        elif "excitement-fomo" in classString:
+            print("*Using excitement-fomo action path*\n")
+            thoughtGuideOutput = await reactToExcitementFOMO(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message)
+            thoughtGuide = thoughtGuideOutput["responseText"]
+        elif "agree-dunk" in classString:
+            print("*Using agree-dunk action path*\n")
+            # Goal is to make the reader have empathy with the person being dunked on
+            thoughtGuideOutput = await reactToPolarizeAgree(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message, a2Name, a2Bio, a2FollowerCt, a2FollowingCt, a2Message)
+            thoughtGuide = "Response from A: " + thoughtGuideOutput[0]["responseText"] + "\n\nResponse from B: " +thoughtGuideOutput[1]["responseText"] 
+        elif "attack-anger" in classString:
+            print("*Using attack-anger action path*\n")
+            # Goal is to make the reader have empathy with the person doing the attacking
+            thoughtGuideOutput = await reactToPolarizeDisagree(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message, a2Name, a2Bio, a2FollowerCt, a2FollowingCt, a2Message)
+            thoughtGuide = "Response from A: " + thoughtGuideOutput[0]["responseText"] + "\n\nResponse from B: " +thoughtGuideOutput[1]["responseText"] 
+        print(thoughtGuide)
 
 async def classifyWithPrompt(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message):
     prompt = textwrap.dedent(f"""
@@ -145,17 +291,17 @@ async def classifyWithPrompt(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Messa
         \t
         -- Categories --
         Doom: the message creates a senes of doom or pessimism about the current state of affairs.
-        Excitement-FOMO: the message makes PersonC excited, but also makes them feel that they should be doing something and that they are missing out.
-        Must-share-too: the message makes PersonC feel that they need to tell everyone that they agree, like a student in class feeling the need to share that they know something right before the teacher teaches everyone. It makes the reader feel the need to let everyone know that they had the thought first.
+        Excitement-FOMO: the message makes PersonC excited about a new technology or opportunity, but also makes them feel that they should be doing something and that they are missing out.
+        Must-Share-Too: the message makes PersonC feel that they need to tell everyone that they agree, like a student in class feeling the need to share that they know something right before the teacher teaches everyone. It makes the reader feel the need to let everyone know that they had the thought first.
         Unfair: the message makes PersonC feel that they are being wronged, that something unfair is happening.
-        Agree-dunk: the message is dunking on someone, and PersonC feels a sense of accomplishment that their team is winning.
-        Anger-dunk: the message is dunking on someone, and PersonC feels attacked because they side with the person being dunked on.
-        Attack-anger: the message makes PersonC feel that some part of their identity is being attacked, even if it is just implied in the message.
-        Superiority-Agreement: the message makes the PersonC feel both like they have to agree, and that in agreeing they are acknowledging the author's superiority -- e.g. because the author had the idea first -- without wanting to.
-        Insecure-fear: the message makes PersonC worry about some aspect about themselves which they are insecure about, like their appearance.
-        Bragging: the message comes off as bragging or a humble-brag, and makes the reader feel less skilled.
-        Project-vulernability: the message is from PersonC, and they are sharing a project that they are working on, and they are being vulnerable because the project is not finished.
-        Fortune-cookie: the message is satisfying to read and feels like it is offering wisdom, but doesn't really say anything concrete.
+        Agree-Dunk: the message is dunking on someone, and PersonC feels a sense of accomplishment that their team is winning.
+        Anger-Dunk: the message is dunking on someone, and PersonC feels attacked because they side with the person being dunked on.
+        Attack-Anger: the message makes PersonC feel that some part of their identity is being attacked, even if it is just implied in the message.
+        Bragging: the message comes across as bragging or a humble-brag, and might make the reader feel less skilled.
+        Superiority-Agreement: the message makes the PersonC feel like the author is trying to be superior to them specifically because the author is sharing an idea first, a sort of nerdsniping.
+        Insecure-Fear: the message makes PersonC worry about some aspect about themselves which they are insecure about, like their appearance.
+        Project-Vulernability: the message is from PersonC, and they are sharing a project that they are working on, and they are being vulnerable because the project is not finished.
+        Fortune-Cookie: the message is satisfying to read and feels like it is offering wisdom, but doesn't really say anything concrete.
         \t
         -- Background Information --
         {a1Name}'s Profile:
@@ -164,10 +310,13 @@ async def classifyWithPrompt(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Messa
         \t
         -- Messages --
         Message from {a1Name}: 
-        {a1Message}
+        {a1Message.replace(chr(10), " ")}
         \t
         -- Classification --
         Which category does the message from {a1Name} fall into for PersonC? If it depends on PersonC's beliefs, list the possible scenarios in the form [if belief]: [category].
+        \t
+        1.
     """).strip()
-    response = await getCompletionOAI(prompt=prompt, temperature=0.7)
+    response = await getCompletionOAI(prompt=prompt, temperature=0.0, max_tokens=300)
     return response
+# %%
