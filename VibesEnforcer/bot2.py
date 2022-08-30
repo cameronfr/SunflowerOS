@@ -218,12 +218,13 @@ async def reactToPolarizeDisagree(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1
 
     return [response1, response2]
 
-async def classifyTweet(url):
+async def createThoughtguideFromTweet(url):
     # url = "https://twitter.com/dystopiabreaker/status/1553200773164462080" #superior
     # url = "https://twitter.com/fchollet/status/976933782367293440" #doom
-    url = "https://twitter.com/hasanthehun/status/1562554743846604800" #argument
+    # url = "https://twitter.com/hasanthehun/status/1562554743846604800" #argument
     # url = "https://twitter.com/Alariko_/status/1562448991086051332" #bragging
     # url = "https://twitter.com/makeitrad1/status/1562815837475467264" #hype/fomo
+    # url = "https://twitter.com/theartofasty/status/1563603627809222657" #negativity-ethics
 
 
     tweetId = int(url.split("/")[-1])
@@ -252,38 +253,67 @@ async def classifyTweet(url):
 
     classString = classificationOutput["responseText"].lower()
 
-    # TODO: deal with cases that depend on reader's beliefs that model predicts
+    # TODO: deal with cases that depend on reader's beliefs
     classString = classString.split("\n")[0]
+    classification = ""
 
 
     if len(classString.split("\n")) == 1:
         if "doom" in classString:
             print("*Using doom action path*\n")
+            classification = "doom"
             thoughtGuideOutput = await reactToDoom(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message)
             thoughtGuide = thoughtGuideOutput["responseText"]
         elif "superior" in classString or "must-share" in classString:
             print("*Using superior / shareurge action path*\n")
+            classification = "superior"
             thoughtGuideOutput = await reactToSignalAgreeUrge(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message)
             thoughtGuide = thoughtGuideOutput["responseText"]
         elif "bragging" in classString:
             print("*Using bragging action path*\n")
+            classification = "bragging"
             thoughtGuideOutput = await reactToBragging(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message)
             thoughtGuide = thoughtGuideOutput["responseText"]
         elif "excitement-fomo" in classString:
             print("*Using excitement-fomo action path*\n")
+            classification = "excitement-fomo"
             thoughtGuideOutput = await reactToExcitementFOMO(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message)
             thoughtGuide = thoughtGuideOutput["responseText"]
         elif "agree-dunk" in classString:
             print("*Using agree-dunk action path*\n")
+            classification = "agree-dunk"
             # Goal is to make the reader have empathy with the person being dunked on
+
+            if "a2Name" not in locals():
+                a2Name = "B"
+                a2Message = "hi"
+                a2FollowerCt = 100
+                a2FollowingCt = 100
+                a2Bio = "hello everyone! this is my bio"
+            # TODO: won't necessarily be a2name & quoted tweet, e.g. https://twitter.com/ReinH/status/1563210768446734336
+            #also, quote-tweet isn't necessarily the one being dunked on, e.g. https://twitter.com/Post__Curtis/status/1562559162248097792
+
             thoughtGuideOutput = await reactToPolarizeAgree(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message, a2Name, a2Bio, a2FollowerCt, a2FollowingCt, a2Message)
-            thoughtGuide = "Response from A: " + thoughtGuideOutput[0]["responseText"] + "\n\nResponse from B: " +thoughtGuideOutput[1]["responseText"] 
+            thoughtGuide = f"Response from {a2Name}: " + thoughtGuideOutput[0]["responseText"] + f"\n\nResponse from {a1Name}: " +thoughtGuideOutput[1]["responseText"] 
         elif "attack-anger" in classString:
             print("*Using attack-anger action path*\n")
+            classification = "attack-anger"
             # Goal is to make the reader have empathy with the person doing the attacking
+
+            if "a2Name" not in locals():
+                a2Name = "RDR"
+                a2Message = "hi"
+                a2FollowerCt = 100
+                a2FollowingCt = 100
+                a2Bio = "hello everyone! this is my bio"
+
             thoughtGuideOutput = await reactToPolarizeDisagree(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message, a2Name, a2Bio, a2FollowerCt, a2FollowingCt, a2Message)
-            thoughtGuide = "Response from A: " + thoughtGuideOutput[0]["responseText"] + "\n\nResponse from B: " +thoughtGuideOutput[1]["responseText"] 
+            thoughtGuide = f"Response from {a2Name}: " + thoughtGuideOutput[0]["responseText"] + f"\n\nResponse from {a1Name}: " +thoughtGuideOutput[1]["responseText"] 
+        else:
+            classification = "other <" + classString + ">"
+            thoughtGuide = "None"
         print(thoughtGuide)
+    return {"thoughtGuide": thoughtGuide, "classification": classification}
 
 async def classifyWithPrompt(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message):
     prompt = textwrap.dedent(f"""
@@ -319,4 +349,44 @@ async def classifyWithPrompt(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Messa
     """).strip()
     response = await getCompletionOAI(prompt=prompt, temperature=0.0, max_tokens=300)
     return response
+# %%
+
+# If site defined, stop it, so can easily refresh server
+if 'site' in globals():
+    await site.stop()
+
+# Async aiohttp web app
+from aiohttp import web
+import logging
+logging.basicConfig(level=logging.INFO)
+import aiohttp_cors
+import asyncio
+app = web.Application()
+
+@routes.get('/')
+async def index(request):
+    return web.Response(text="Hello, world")
+@routes.post('/generate')
+async def generate(request):
+    data = await request.json()
+    response = await createThoughtguideFromTweet(data["tweetURL"])
+    return web.json_response(response)
+app.add_routes(routes)
+
+# Send CORS header on all requests
+cors = aiohttp_cors.setup(app, defaults={
+    "*": aiohttp_cors.ResourceOptions(
+        allow_credentials=True,
+        expose_headers="*",
+        allow_headers="*"
+    )
+})
+for route in list(app.router.routes()):
+    cors.add(route)
+
+runner = aiohttp.web.AppRunner(app)
+await runner.setup()
+site = aiohttp.web.TCPSite(runner, 'localhost', 8089)    
+await site.start()
+
 # %%
