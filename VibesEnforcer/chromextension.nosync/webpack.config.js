@@ -140,6 +140,11 @@ var options = {
           to: path.join(__dirname, 'build'),
           force: true,
         },
+        {
+          from: 'src/pages/Content/tailwindcss3.1.8.js',
+          to: path.join(__dirname, 'build'),
+          force: true,
+        },
       ],
     }),
     new CopyWebpackPlugin({

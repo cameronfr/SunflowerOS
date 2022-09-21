@@ -121,9 +121,8 @@ async def reactToDoom(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message):
 
 async def reactToExcitementFOMO(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message):
 
-    print(a1Message)
     prompt = textwrap.dedent(f"""
-    # The following is a message from {a1Name}. In his second message, {a1Name} encourages the reader to stay focused on what they are working on, and assures them that they will know when to use the hyped thing in the first message.
+    The following is a message from {a1Name}. In his second message, {a1Name} tones down the hype in their first message, encouraging the reader to stay focused on what they are working on.
     \t
     {a1Name}'s Profile:
     Follower Count: {a1FollowerCt}, Following Count: {a1FollowingCt}
@@ -135,6 +134,7 @@ async def reactToExcitementFOMO(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Me
     Message from {a1Name}:
     """).strip() 
     response = await getCompletionOAI(prompt=prompt, temperature=0.7)
+    print(response["promptDebug"])
     print("\n" + response["responseText"])
 
     return response
@@ -234,7 +234,7 @@ async def createThoughtguideFromTweet(url):
     a1Bio = tweetInfo.user.description
     a1FollowerCt = tweetInfo.user.followersCount
     a1FollowingCt = tweetInfo.user.friendsCount
-    a1Message = tweetInfo.content
+    a1Message = tweetInfo.content.replace("\n", " ") # temp fix for newlines screwing up f string indentation
     if tweetInfo.card is not None:
         a1Message += f""" [CARD: {tweetInfo.card.siteUser.displayname} | {tweetInfo.card.title} | {tweetInfo.card.description}]"""
 
@@ -243,7 +243,7 @@ async def createThoughtguideFromTweet(url):
         a2Bio = tweetInfo.quotedTweet.user.description
         a2FollowerCt = tweetInfo.quotedTweet.user.followersCount
         a2FollowingCt = tweetInfo.quotedTweet.user.friendsCount
-        a2Message = tweetInfo.quotedTweet.content
+        a2Message = tweetInfo.quotedTweet.content.replace("\n", " ")
         if tweetInfo.quotedTweet.card is not None:
             a2Message += f""" [CARD: {tweetInfo.quotedTweet.card.siteUser.displayname} | {tweetInfo.quotedTweet.card.title} | {tweetInfo.quotedTweet.card.description}]"""
     
@@ -313,7 +313,7 @@ async def createThoughtguideFromTweet(url):
             classification = "other <" + classString + ">"
             thoughtGuide = "None"
         print(thoughtGuide)
-    return {"thoughtGuide": thoughtGuide, "classification": classification}
+    return {"thoughtGuide": thoughtGuide, "classification": classification, "promptDebug1": classificationOutput["promptDebug"]}
 
 async def classifyWithPrompt(a1Name, a1Bio, a1FollowerCt, a1FollowingCt, a1Message):
     prompt = textwrap.dedent(f"""
@@ -362,6 +362,7 @@ logging.basicConfig(level=logging.INFO)
 import aiohttp_cors
 import asyncio
 app = web.Application()
+routes = web.RouteTableDef()
 
 @routes.get('/')
 async def index(request):
