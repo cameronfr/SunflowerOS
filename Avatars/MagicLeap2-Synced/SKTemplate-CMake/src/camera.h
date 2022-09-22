@@ -103,8 +103,11 @@ public:
 
   // Gets image and the pose of the head/camera at the time the img was taken.
   const std::tuple<torch::Tensor, MLTransform> GetOutput() 
-  {
-    torch::Tensor img = torch::from_blob((void*)framebuffer_.data(), {capture_height_, capture_width_, 4}, torch::kByte); 
+  { 
+    // torch::Tensor img = torch::from_blob((void*)framebuffer_.data(), {capture_height_, capture_width_, 4}, torch::kByte); 
+    // Must clone because frame buffer is reused, and if don't clone then data might change as we're using it. 
+    // Need to free something later after this clone?
+    torch::Tensor img = torch::from_blob((void*)framebuffer_.data(), {capture_height_, capture_width_, 4}, torch::kByte).clone(); 
     return std::make_tuple(img, current_transform);
   }
 

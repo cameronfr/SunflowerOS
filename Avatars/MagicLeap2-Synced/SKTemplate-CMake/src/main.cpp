@@ -170,7 +170,7 @@ int main(int argc, char *argv[]) {
   tex_t cameraTex = tex_create(tex_type_image, tex_format_rgba32);
   material_t desktop_material = material_copy_id (default_id_material_unlit);
   material_set_texture(desktop_material, "diffuse", cameraTex);
-	mesh_t desktop_mesh = mesh_gen_plane({0.2, 0.2}, { 0,0,1 }, {0,1,0}); 
+	mesh_t desktop_mesh = mesh_gen_plane({0.2*1.0, 0.2}, { 0,0,1 }, {0,1,0}); 
 
   // Inits for magic leap head tracking api
   MLHandle head_tracker_;
@@ -186,7 +186,7 @@ int main(int argc, char *argv[]) {
   torch::Tensor poseWorld = torch::zeros({33, 3});
 
   static auto update = [&]() {
-    if (frameNum % (60*60) == 0) {
+    if (frameNum % (60*120) == 0) {
       if (poseModel != nullptr) {
         dlOpenDestroyClass("libPoseModel.so", poseModel);
       }

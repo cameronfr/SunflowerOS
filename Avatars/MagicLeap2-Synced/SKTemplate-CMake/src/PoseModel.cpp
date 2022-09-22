@@ -1,6 +1,7 @@
 #include <torch/script.h>
 #include "tensorflow/lite/c/c_api.h"
 #include "tensorflow/lite/delegates/gpu/delegate.h"
+#include "debug.h"
 
 #include <stereokit.h>
 #include <android/log.h>
@@ -181,11 +182,16 @@ public:
       // addRedDot(rawImage, allKpts[3][0].item<int>(), allKpts[3][1].item<int>()); // 1 is head center
       // addRedDot(rawImage, allKpts[1][0].item<int>(), allKpts[1][1].item<int>()); // 3 is a
       // debugShowImg(rawImage, debugTex);
+
       int radius = (int)2 * torch::square(allKpts[1] - hips).sum().sqrt().item<float>(); 
-      int mind0 = std::max(0, hips[0].item<int>() - radius);
-      int maxd0 = std::min((int)rawImage.size(1), hips[0].item<int>() + radius);
-      int mind1 = std::max(0, hips[1].item<int>() - radius);
-      int maxd1 = std::min((int)rawImage.size(0), hips[1].item<int>() + radius);
+      // int mind0 = std::max(0, hips[0].item<int>() - radius);
+      // int maxd0 = std::min((int)rawImage.size(1), hips[0].item<int>() + radius);
+      // int mind1 = std::max(0, hips[1].item<int>() - radius);
+      // int maxd1 = std::min((int)rawImage.size(0), hips[1].item<int>() + radius);
+      int mind0 = hips[0].item<int>() - radius;
+      int maxd0 = hips[0].item<int>() + radius;
+      int mind1 = hips[1].item<int>() - radius;
+      int maxd1 = hips[1].item<int>() + radius;
 
       int coords[] = {mind0, maxd0, mind1, maxd1};
       return std::make_tuple(torch::from_blob(coords, {4}, torch::kInt32).clone(), true);
@@ -214,7 +220,8 @@ public:
     }
 
     if (haveROI) {
-      // TODO: rotate ROI so that person is upright. Also, seems like supposed to not crop ROI roi, but instead full with black if it extends out of img.
+      // TODO: rotate ROI so that person is upright. 
+      // Also, don't do transform until at end, so only copy tensor once
       int mind0 = roiBounds[0].item<int>();
       int maxd0 = roiBounds[1].item<int>();
       int mind1 = roiBounds[2].item<int>();
@@ -222,23 +229,36 @@ public:
 
       if (mind0 >= maxd0 - 2 || mind1 >= maxd1 - 2) {
         std::cout << "ROI has width or height <= 2, returning" << std::endl;
+        useLastLandmarkROI = false;
         return false;
       }
 
       // rawImage.index_put_({Slice(mind0, maxd0), Slice(mind1, maxd1), Slice()}, 
       //   rawImage.index({Slice(mind0, maxd0), Slice(mind1, maxd1), Slice()}) / 2
       // );
-
       // std::cout << "ROI: " << mind0 << " " << maxd0 << " " << mind1 << " " << maxd1 << std::endl;
-      torch::Tensor box = rawImage.index({Slice(mind0, maxd0), Slice(mind1, maxd1), Slice()});
+      // torch::Tensor box = rawImage.index({Slice(mind0, maxd0), Slice(mind1, maxd1), Slice()});
+
+      // Allow roi to be out of bounds of original image (i.e. negative or > img size)
+      int mind0Clamped = std::max(0, mind0);
+      int maxd0Clamped = std::min((int)rawImage.size(0), maxd0);
+      int mind1Clamped = std::max(0, mind1);
+      int maxd1Clamped = std::min((int)rawImage.size(1), maxd1);
+      torch::Tensor box = torch::zeros({maxd0 - mind0, maxd1 - mind1, 4});
+      // tensorInfo(box, "box");
+      // tensorInfo(rawImage, "rawImage");
+      // std::cout << "Putting from " << mind0Clamped << " " << maxd0Clamped << " " << mind1Clamped << " " << maxd1Clamped << " on raw image, onto " << mind0Clamped - mind0 << " " << maxd0Clamped - mind0 << " " << mind1Clamped - mind1 << " " << maxd1Clamped - mind1 << " on box" << std::endl;
+      box.index_put_({Slice(mind0Clamped - mind0, maxd0Clamped - mind0), Slice(mind1Clamped - mind1, maxd1Clamped - mind1), Slice()}, 
+        rawImage.index({Slice(mind0Clamped, maxd0Clamped), Slice(mind1Clamped, maxd1Clamped), Slice()})
+      );
+
       auto boxResizeOut = ResizeImage(box, 256, true);
       torch::Tensor boxResizeOutTensor = std::get<0>(boxResizeOut);
       std::function<torch::Tensor(torch::Tensor, bool)> boxResizeOutCoordMap = std::get<1>(boxResizeOut);
-      // debugShowImg(boxResizeOutTensor);
 
       // Run box through landmark estimator
       TfLiteTensor* inputTensorTf2 = TfLiteInterpreterGetInputTensor(pose_landmarks_tflite.interpreter, 0);
-      torch::Tensor inputTensor2 = boxResizeOutTensor.index({"...", Slice(0, 3)}).to(torch::kFloat32).div_(255.0f).sub_(0.5f).div_(0.5f); 
+      torch::Tensor inputTensor2 = boxResizeOutTensor.index({"...", Slice(0, 3)}).to(torch::kFloat32).div_(255.0f); 
       // std::cout << "inputTensor2: " << inputTensor2.sizes() << std::endl;
       int status = TfLiteTensorCopyFromBuffer(inputTensorTf2, inputTensor2.data_ptr(), inputTensor2.nbytes());
       if (status != kTfLiteOk) {
@@ -249,19 +269,25 @@ public:
       TfLiteInterpreterInvoke(pose_landmarks_tflite.interpreter);
 
       const TfLiteTensor* tfLandmarkOutput = TfLiteInterpreterGetOutputTensor(pose_landmarks_tflite.interpreter, 0);
-      torch::Tensor landmarkOutputRaw = torch::from_blob(tfLandmarkOutput->data.data, {33, 5}, torch::kFloat32);
+      // torch::Tensor landmarkOutputRaw = torch::from_blob(tfLandmarkOutput->data.data, {33, 5}, torch::kFloat32);
+      torch::Tensor landmarkOutputRaw = torch::from_blob(tfLandmarkOutput->data.data, {35, 5}, torch::kFloat32); //actually 35, last two are auxillary
 
       // landmarkOutputMain is 33 keypoints, (y,x) 
       torch::Tensor landmarkOutputYX = torch::flip(landmarkOutputRaw.index({Slice(), Slice(0, 2)}), {-1});
+      for (int i = 33; i < landmarkOutputYX.size(0); i++) {
+        addRedDot(boxResizeOutTensor, landmarkOutputYX[i][0].item<int>(),  landmarkOutputYX[i][1].item<int>());
+      }
+      debugShowImg(boxResizeOutTensor, debugTex);
       torch::Tensor landmarkOutputZ = landmarkOutputRaw.index({Slice(), Slice(2, 3)});
       int boxStartOffsetArr[] = {mind0, mind1};
       torch::Tensor boxStartOffset = torch::from_blob(boxStartOffsetArr, {2}, torch::kInt32).clone();
       landmarkOutputYX = boxResizeOutCoordMap(landmarkOutputYX, false) + boxStartOffset;
       landmarkOutputZ = boxResizeOutCoordMap(landmarkOutputZ, true); //try and keep Z in same scale as YX, even though it's not really a coordinate
-      for (int i = 0; i < landmarkOutputYX.size(0); i++) {
-        addRedDot(rawImage, landmarkOutputYX[i][0].item<int>(),  landmarkOutputYX[i][1].item<int>());
-      }
-      debugShowImg(rawImage, debugTex);
+
+      // for (int i = 34; i < landmarkOutputYX.size(0); i++) {
+      //   addRedDot(rawImage, landmarkOutputYX[i][0].item<int>(),  landmarkOutputYX[i][1].item<int>());
+      // }
+      // debugShowImg(rawImage, debugTex);
 
       // tensorInfo(torch::flip(landmarkOutputMain, {-1}));
       // tensorInfo(landmarkOutputRaw.index({Slice(), Slice(2)}));
@@ -272,24 +298,37 @@ public:
 
       // Save ROI for next frame, if the track is good
       if (avgVisibilityProb > 0.7) {
-        // Make ROI from landmarks
-        int roi_mind0 = torch::min(landmarkOutputYX.index({Slice(), 0})).item<int>();
-        int roi_maxd0 = torch::max(landmarkOutputYX.index({Slice(), 0})).item<int>();
-        int roi_mind1 = torch::min(landmarkOutputYX.index({Slice(), 1})).item<int>();
-        int roi_maxd1 = torch::max(landmarkOutputYX.index({Slice(), 1})).item<int>();
+        // Make ROI from landmarks. Method of bbox around all points + allow-mind0/maxd0 to be negative works well
+        // Other strategy of using center + scale + don't-allow-negative works well too (this is what mediapipe uses)
+        // int roi_mind0 = torch::min(landmarkOutputYX.index({Slice(), 0})).item<int>();
+        // int roi_maxd0 = torch::max(landmarkOutputYX.index({Slice(), 0})).item<int>();
+        // int roi_mind1 = torch::min(landmarkOutputYX.index({Slice(), 1})).item<int>();
+        // int roi_maxd1 = torch::max(landmarkOutputYX.index({Slice(), 1})).item<int>();
+
+        torch::Tensor centerKpt = landmarkOutputYX.index({33});
+        torch::Tensor scaleKpt = landmarkOutputYX.index({34});
+        int radius = 1.0*(centerKpt - scaleKpt).norm().item<int>();
+        int roi_mind0 = centerKpt[0].item<int>() - radius;
+        int roi_maxd0 = centerKpt[0].item<int>() + radius;
+        int roi_mind1 = centerKpt[1].item<int>() - radius;
+        int roi_maxd1 = centerKpt[1].item<int>() + radius;
+
         // Expand by 25%
-        int roi_mind0_exp = std::max(0, (int)(roi_mind0 - (roi_maxd0 - roi_mind0) * 0.5));
-        int roi_maxd0_exp = std::min((int)rawImage.size(0), (int)(roi_maxd0 + (roi_maxd0 - roi_mind0) * 0.5));
-        int roi_mind1_exp = std::max(0, (int)(roi_mind1 - (roi_maxd1 - roi_mind1) * 0.5));
-        int roi_maxd1_exp = std::min((int)rawImage.size(1), (int)(roi_maxd1 + (roi_maxd1 - roi_mind1) * 0.5));
+        int roi_length_d0 = roi_maxd0 - roi_mind0;
+        int roi_length_d1 = roi_maxd1 - roi_mind1;
+        int roi_mind0_exp = roi_mind0 - (int)(roi_length_d0 * 0.25);
+        int roi_maxd0_exp = roi_maxd0 + (int)(roi_length_d0 * 0.25);
+        int roi_mind1_exp = roi_mind1 - (int)(roi_length_d1 * 0.25);
+        int roi_maxd1_exp = roi_maxd1 + (int)(roi_length_d1 * 0.25);
+
+        roi_mind0_exp = std::max(0, roi_mind0_exp);
+        roi_maxd0_exp = std::min((int)rawImage.size(0), roi_maxd0_exp);
+        roi_mind1_exp = std::max(0, roi_mind1_exp);
+        roi_maxd1_exp = std::min((int)rawImage.size(1), roi_maxd1_exp);
         torch::Tensor roiBoundsLandmarks = torch::from_blob((int[]){roi_mind0_exp, roi_maxd0_exp, roi_mind1_exp, roi_maxd1_exp}, {4}, torch::kInt32).clone();
         lastLandmarkROI = roiBoundsLandmarks;
         useLastLandmarkROI = true;
-
-        // rawImage.index_put_({Slice(roi_mind0_exp, roi_maxd0_exp), Slice(roi_mind1_exp, roi_maxd1_exp), Slice()}, 
-        //   rawImage.index({Slice(roi_mind0_exp, roi_maxd0_exp), Slice(roi_mind1_exp, roi_maxd1_exp), Slice()}) / 2
-        // );
-        // debugShowImg(rawImage, debugTex);
+        // useLastLandmarkROI = false;
       } else {
         std::cout << "avgVisibilityProb too low, not using this as ROI, val is " << avgVisibilityProb << std::endl;
         useLastLandmarkROI = false;
