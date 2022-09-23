@@ -3,6 +3,8 @@
 #include "tensorflow/lite/delegates/gpu/delegate.h"
 #include "debug.h"
 
+#include "OneEuroFilter.cpp"
+
 #include <stereokit.h>
 #include <android/log.h>
 #include <iostream>
@@ -57,10 +59,14 @@ public:
   PoseModel() : 
     pose_detector_tflite("/data/data/com.termux/files/home/MagicLeap2-Synced/models/pose_detection.tflite"),
     pose_landmarks_tflite("/data/data/com.termux/files/home/MagicLeap2-Synced/models/pose_landmark_lite.tflite") {
-    pose_detection_anchors = GenerateAnchors();
-    printf("Person Detec Anchors Count : %d\n", pose_detection_anchors.size(0));
-    latestPose = torch::zeros({33, 3}); //x,y,z in image coordinates;
-    // TfLiteInterpreter* pose_tflite_interpreter = CreateTfLiteInterpreter("/data/data/com.termux/files/home/MagicLeap2-Synced/models/pose_landmark_lite.tflite");
+      // main_keypoints_filter.Initialize(0, torch::zeros({35, 5}), torch::zeros({35, 5}), 0.05, 80, 1.0);
+      // main_keypoints_filter.Initialize(0, torch::zeros({35, 5}), torch::zeros({35, 5}), 0.05, 0.31, 1.0);
+      main_keypoints_filter.Initialize(0, torch::zeros({35, 5}), torch::zeros({35, 5}), 0.01, 0.03875, 1.0);
+      //aux_keypoints_filter(0, torch::zeros({33, 5}, torch::zeros({33, 5}), 0.01, 10, 1.0) {
+      pose_detection_anchors = GenerateAnchors();
+      printf("Person Detec Anchors Count : %d\n", pose_detection_anchors.size(0));
+      latestPose = torch::zeros({33, 3}); //x,y,z in image coordinates;
+      // TfLiteInterpreter* pose_tflite_interpreter = CreateTfLiteInterpreter("/data/data/com.termux/files/home/MagicLeap2-Synced/models/pose_landmark_lite.tflite");
   }
   ~PoseModel() {
   };
@@ -271,6 +277,12 @@ public:
       const TfLiteTensor* tfLandmarkOutput = TfLiteInterpreterGetOutputTensor(pose_landmarks_tflite.interpreter, 0);
       // torch::Tensor landmarkOutputRaw = torch::from_blob(tfLandmarkOutput->data.data, {33, 5}, torch::kFloat32);
       torch::Tensor landmarkOutputRaw = torch::from_blob(tfLandmarkOutput->data.data, {35, 5}, torch::kFloat32); //actually 35, last two are auxillary
+      long long time_us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+      // printf("Landmark time: %lld\n", time_us);
+      // std::cout << "landmarkOutputRaw: " << landmarkOutputRaw << std::endl;
+      // TODO: scale landmarks based on hip-distance before entering filter, then unscale.
+      landmarkOutputRaw = main_keypoints_filter.filter(time_us, landmarkOutputRaw); // TODO: are parameters tuned for input or scaled input?
+      // std::cout << "landmarkOutputRaw: " << landmarkOutputRaw << std::endl;
 
       // landmarkOutputMain is 33 keypoints, (y,x) 
       torch::Tensor landmarkOutputYX = torch::flip(landmarkOutputRaw.index({Slice(), Slice(0, 2)}), {-1});
@@ -298,34 +310,22 @@ public:
 
       // Save ROI for next frame, if the track is good
       if (avgVisibilityProb > 0.7) {
-        // Make ROI from landmarks. Method of bbox around all points + allow-mind0/maxd0 to be negative works well
-        // Other strategy of using center + scale + don't-allow-negative works well too (this is what mediapipe uses)
-        // int roi_mind0 = torch::min(landmarkOutputYX.index({Slice(), 0})).item<int>();
-        // int roi_maxd0 = torch::max(landmarkOutputYX.index({Slice(), 0})).item<int>();
-        // int roi_mind1 = torch::min(landmarkOutputYX.index({Slice(), 1})).item<int>();
-        // int roi_maxd1 = torch::max(landmarkOutputYX.index({Slice(), 1})).item<int>();
+        // Works well to use mediapipe method w/ mind0 etc allowed to be negative. s.t. center aux keypoint is always at center of imag fed to mediapipe.
 
         torch::Tensor centerKpt = landmarkOutputYX.index({33});
         torch::Tensor scaleKpt = landmarkOutputYX.index({34});
-        int radius = 1.0*(centerKpt - scaleKpt).norm().item<int>();
+        int radius = 1.25*(centerKpt - scaleKpt).norm().item<int>(); //i.e., width is 1.25r+1.25r = 2r*1.25 -- what mediapipe is doing
         int roi_mind0 = centerKpt[0].item<int>() - radius;
         int roi_maxd0 = centerKpt[0].item<int>() + radius;
         int roi_mind1 = centerKpt[1].item<int>() - radius;
         int roi_maxd1 = centerKpt[1].item<int>() + radius;
 
-        // Expand by 25%
-        int roi_length_d0 = roi_maxd0 - roi_mind0;
-        int roi_length_d1 = roi_maxd1 - roi_mind1;
-        int roi_mind0_exp = roi_mind0 - (int)(roi_length_d0 * 0.25);
-        int roi_maxd0_exp = roi_maxd0 + (int)(roi_length_d0 * 0.25);
-        int roi_mind1_exp = roi_mind1 - (int)(roi_length_d1 * 0.25);
-        int roi_maxd1_exp = roi_maxd1 + (int)(roi_length_d1 * 0.25);
+        // roi_mind0 = std::max(0, roi_mind0);
+        // roi_maxd0 = std::min((int)rawImage.size(0), roi_maxd0);
+        // roi_mind1 = std::max(0, roi_mind1);
+        // roi_maxd1 = std::min((int)rawImage.size(1), roi_maxd1);
+        torch::Tensor roiBoundsLandmarks = torch::from_blob((int[]){roi_mind0, roi_maxd0, roi_mind1, roi_maxd1}, {4}, torch::kInt32).clone();
 
-        roi_mind0_exp = std::max(0, roi_mind0_exp);
-        roi_maxd0_exp = std::min((int)rawImage.size(0), roi_maxd0_exp);
-        roi_mind1_exp = std::max(0, roi_mind1_exp);
-        roi_maxd1_exp = std::min((int)rawImage.size(1), roi_maxd1_exp);
-        torch::Tensor roiBoundsLandmarks = torch::from_blob((int[]){roi_mind0_exp, roi_maxd0_exp, roi_mind1_exp, roi_maxd1_exp}, {4}, torch::kInt32).clone();
         lastLandmarkROI = roiBoundsLandmarks;
         useLastLandmarkROI = true;
         // useLastLandmarkROI = false;
@@ -457,6 +457,7 @@ private:
 
   TfLiteInterpreterWrapper pose_detector_tflite;
   TfLiteInterpreterWrapper pose_landmarks_tflite;
+  OneEuroFilter main_keypoints_filter;
   torch::Tensor pose_detection_anchors;
   torch::Tensor lastLandmarkROI;
   torch::Tensor latestPose;
