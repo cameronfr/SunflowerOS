@@ -2,6 +2,8 @@
 #include "PoseModel.cpp" // Only used for definitions, implementation is dlopened
 #include "debug.h"
 
+#include<cmath>
+
 #include <stereokit.h>
 #include <stereokit_ui.h>
 #include <signal.h>
@@ -55,6 +57,20 @@ template <typename T> void dlOpenDestroyClass(const char *libName, T* instance) 
       printf("dlsym failed: %s\n", dlerror());
   }
   destroy(instance);
+}
+
+float targetLengthDistCalc(float z1, float z2, float a1, float a2, float a3, float b1, float b2, float b3, float l) {
+  // wolframAlpha solve for n, and then converted with Copilot (fixed by me)
+  //Equation: ((z_1+n)*a_1 - (z_2+n)*b_1)**2 + ((z_1+n)*a_2 - (z_2+n)*b_2)**2 + ((z_1+n)*a_3 - (z_2+n)*b_3)**2= l**2, solve for n
+
+  //n = (1/2 sqrt((2 a_1 b_1 z_1 + 2 a_1 b_1 z_2 + 2 a_2 b_2 z_1 + 2 a_3 b_3 z_1 + 2 a_2 b_2 z_2 + 2 a_3 b_3 z_2 - 2 a_1^2 z_1 - 2 a_2^2 z_1 - 2 a_3^2 z_1 - 2 b_1^2 z_2 - 2 b_2^2 z_2 - 2 b_3^2 z_2)^2 - 4 (2 a_1 b_1 + 2 a_2 b_2 + 2 a_3 b_3 - a_1^2 - a_2^2 - a_3^2 - b_1^2 - b_2^2 - b_3^2) (2 a_1 b_1 z_1 z_2 + 2 a_2 b_2 z_1 z_2 + 2 a_3 b_3 z_1 z_2 - a_1^2 z_1^2 - a_2^2 z_1^2 - a_3^2 z_1^2 - b_1^2 z_2^2 - b_2^2 z_2^2 - b_3^2 z_2^2 + l^2)) + a_1 b_1 z_1 + a_1 b_1 z_2 + a_2 b_2 z_1 + a_3 b_3 z_1 + a_2 b_2 z_2 + a_3 b_3 z_2 + a_1^2 (-z_1) - a_2^2 z_1 - a_3^2 z_1 - b_1^2 z_2 - b_2^2 z_2 - b_3^2 z_2)/(-2 a_1 b_1 - 2 a_2 b_2 - 2 a_3 b_3 + a_1^2 + a_2^2 + a_3^2 + b_1^2 + b_2^2 + b_3^2) 
+  float n = (0.5*sqrt(
+      pow(2*a1*b1*z1 + 2*a1*b1*z2 + 2*a2*b2*z1 + 2*a3*b3*z1 + 2*a2*b2*z2 + 2*a3*b3*z2 - 2*a1*a1*z1 - 2*a2*a2*z1 - 2*a3*a3*z1 - 2*b1*b1*z2 - 2*b2*b2*z2 - 2*b3*b3*z2, 2) 
+      - 4*(2*a1*b1 + 2*a2*b2 + 2*a3*b3 - a1*a1 - a2*a2 - a3*a3 - b1*b1 - b2*b2 - b3*b3)*(2*a1*b1*z1*z2 + 2*a2*b2*z1*z2 + 2*a3*b3*z1*z2 - a1*a1*z1*z1 - a2*a2*z1*z1 - a3*a3*z1*z1 - b1*b1*z2*z2 - b2*b2*z2*z2 - b3*b3*z2*z2 + l*l)
+      ) + a1*b1*z1 + a1*b1*z2 + a2*b2*z1 + a3*b3*z1 + a2*b2*z2 + a3*b3*z2 + a1*a1*(-z1) - a2*a2*z1 - a3*a3*z1 - b1*b1*z2 - b2*b2*z2 - b3*b3*z2
+    )/ (-2*a1*b1 - 2*a2*b2 - 2*a3*b3 + a1*a1 + a2*a2 + a3*a3 + b1*b1 + b2*b2 + b3*b3);
+
+  return n;
 }
 
 
@@ -186,7 +202,7 @@ int main(int argc, char *argv[]) {
   torch::Tensor poseWorld = torch::zeros({33, 3});
 
   static auto update = [&]() {
-    if (frameNum % (60*3) == 0) {
+    if (frameNum % (60*240) == 0) {
       if (poseModel != nullptr) {
         dlOpenDestroyClass("libPoseModel.so", poseModel);
       }
@@ -233,6 +249,7 @@ int main(int argc, char *argv[]) {
         // Local-on-left because DirectX uses version of transform-matrix that looks transpose from standard, and it's like [1x4] * [matrix^T] instead of [4x1] * [matrix]. Stereokit uses DirectX transform-matrix construction functions, so it's local-on-left.
         // See http://davidlively.com/programming/graphics/opengl-matrices/row-major-vs-column-major/
         torch::Tensor poseImageCoords = poseModel->GetLatestPose(); //33 x [x,y,z]
+
         torch::Tensor poseImageZ = poseImageCoords.index({Slice(), 2});// * -1; // map coord to -Z forwards
         torch::Tensor poseXYOnCameraPlane = camera.MapImageCoordsTo3DCoords(poseImageCoords.index({Slice(), Slice(0,2)}), 1.0f);
         poseXYOnCameraPlane *= torch::from_blob((float[]){1, -1, -1}, {3}, torch::kFloat); // map coord system　to sk
@@ -241,12 +258,30 @@ int main(int argc, char *argv[]) {
         // tensorInfo(poseImageZ, "poseImageZ");
         // tensorInfo(poseXYOnCameraPlane, "poseXYOnCameraPlane");
         // std::cout << "poseXYOnCameraPlane: " << 1.0f + (poseImageZ.unsqueeze(1) * camera.GetIntrinsicsInverseMatrixXScale()) << std::endl;
-        // Put hips at 2.0, then move along ray by Z-distance from model
-        poseXYOnCameraPlane = (2.0f + (poseImageZ.unsqueeze(1) * camera.GetIntrinsicsInverseMatrixXScale())) * poseXYOnCameraPlane;
+        // Put hips at 0, and for each point move along ray by Z-distance (which we get from pose model, and is supposed to be approx same scale as x-pixels, and has z=0 at hips)
+        torch::Tensor poseImageZScaled = poseImageZ.unsqueeze(1) * camera.GetIntrinsicsInverseMatrixXScale();
+        torch::Tensor poseRelativeToCamera = (0.0 + (poseImageZScaled)) * poseXYOnCameraPlane;
+
+        // Choose distance of hip from camera by making the shoulder-width a fixed value. This means that distance will only be accurate if the human in question has that shoulder-width.
+        float z1, z2, a1, a2, a3, b1, b2, b3, l;
+        z1 = poseImageZScaled[11][0].item<float>();
+        z2 = poseImageZScaled[12][0].item<float>();
+        a1 = poseXYOnCameraPlane[11][0].item<float>();
+        a2 = poseXYOnCameraPlane[11][1].item<float>();
+        a3 = poseXYOnCameraPlane[11][2].item<float>();
+        b1 = poseXYOnCameraPlane[12][0].item<float>();
+        b2 = poseXYOnCameraPlane[12][1].item<float>();
+        b3 = poseXYOnCameraPlane[12][2].item<float>();
+        l = 0.35; // 0.35 meter shoulder-distance target
+        float estDistFromCamera = targetLengthDistCalc(z1, z2, a1, a2, a3, b1, b2, b3, l);
+
+        poseRelativeToCamera += estDistFromCamera * poseXYOnCameraPlane;
+        float newShoulderDist = torch::norm(poseRelativeToCamera[11] - poseRelativeToCamera[12]).item<float>();
+        std::cout << "Shoulder dist of pose, this should be constant" << newShoulderDist << std::endl;
 
         matrix physicalCameraToWorldSpaceMat = pose_matrix({imgCamTrans_pos, imgCamTrans_quat}, vec3_one);
         torch::Tensor physicalCameraToWorldSpace = torch::from_blob(physicalCameraToWorldSpaceMat.m, {4,4}, torch::kFloat); // this is the same as the sk matrix and we can use it as [nx4] * [matrix]
-        poseWorld = torch::mm(poseXYOnCameraPlane, physicalCameraToWorldSpace.index({Slice(0,3), Slice(0,3)})) + physicalCameraToWorldSpace.index({3, Slice(0, 3)}); // does same thing as if we made the poseOnCameraPlane points nx4 (by appending one) and multiplied by the 4x4 matrix
+        poseWorld = torch::mm(poseRelativeToCamera, physicalCameraToWorldSpace.index({Slice(0,3), Slice(0,3)})) + physicalCameraToWorldSpace.index({3, Slice(0, 3)}); // does same thing as if we made the poseOnCameraPlane points nx4 (by appending one) and multiplied by the 4x4 matrix
       }
     }
 
