@@ -186,7 +186,7 @@ int main(int argc, char *argv[]) {
   torch::Tensor poseWorld = torch::zeros({33, 3});
 
   static auto update = [&]() {
-    if (frameNum % (60*120) == 0) {
+    if (frameNum % (60*3) == 0) {
       if (poseModel != nullptr) {
         dlOpenDestroyClass("libPoseModel.so", poseModel);
       }

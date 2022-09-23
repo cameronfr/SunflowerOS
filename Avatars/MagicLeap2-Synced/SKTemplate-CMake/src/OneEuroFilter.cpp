@@ -26,6 +26,11 @@ class OneEuroFilter {
       this->x_prev = x0;
       this->dx_prev = dx0;
       this->t_prev = t0;
+
+      if (x_prev.sizes() != dx_prev.sizes()) {
+        throw std::invalid_argument("x_prev and dx_prev must have the same shape");
+      }
+
       initialized = true;
     }
 
