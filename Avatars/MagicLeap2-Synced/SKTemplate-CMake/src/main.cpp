@@ -62,6 +62,7 @@ template <typename T> void dlOpenDestroyClass(const char *libName, T* instance) 
 float targetLengthDistCalc(float z1, float z2, float a1, float a2, float a3, float b1, float b2, float b3, float l) {
   // wolframAlpha solve for n, and then converted with Copilot (fixed by me)
   //Equation: ((z_1+n)*a_1 - (z_2+n)*b_1)**2 + ((z_1+n)*a_2 - (z_2+n)*b_2)**2 + ((z_1+n)*a_3 - (z_2+n)*b_3)**2= l**2, solve for n
+  // Basically, we have two rays from the camera a_vec and b_vec. We want dist((z_1+n)*a_vec, (z_2+n)*b_vec) = l
 
   //n = (1/2 sqrt((2 a_1 b_1 z_1 + 2 a_1 b_1 z_2 + 2 a_2 b_2 z_1 + 2 a_3 b_3 z_1 + 2 a_2 b_2 z_2 + 2 a_3 b_3 z_2 - 2 a_1^2 z_1 - 2 a_2^2 z_1 - 2 a_3^2 z_1 - 2 b_1^2 z_2 - 2 b_2^2 z_2 - 2 b_3^2 z_2)^2 - 4 (2 a_1 b_1 + 2 a_2 b_2 + 2 a_3 b_3 - a_1^2 - a_2^2 - a_3^2 - b_1^2 - b_2^2 - b_3^2) (2 a_1 b_1 z_1 z_2 + 2 a_2 b_2 z_1 z_2 + 2 a_3 b_3 z_1 z_2 - a_1^2 z_1^2 - a_2^2 z_1^2 - a_3^2 z_1^2 - b_1^2 z_2^2 - b_2^2 z_2^2 - b_3^2 z_2^2 + l^2)) + a_1 b_1 z_1 + a_1 b_1 z_2 + a_2 b_2 z_1 + a_3 b_3 z_1 + a_2 b_2 z_2 + a_3 b_3 z_2 + a_1^2 (-z_1) - a_2^2 z_1 - a_3^2 z_1 - b_1^2 z_2 - b_2^2 z_2 - b_3^2 z_2)/(-2 a_1 b_1 - 2 a_2 b_2 - 2 a_3 b_3 + a_1^2 + a_2^2 + a_3^2 + b_1^2 + b_2^2 + b_3^2) 
   float n = (0.5*sqrt(
@@ -165,9 +166,18 @@ int main(int argc, char *argv[]) {
   pose_t cube_pose;
 
   // avatar = model_create_file("../../../vroiddemo.glb");
-  avatar = model_create_file("../../../vroiddemo_manualoptim_1.glb");
+  // avatar = model_create_file("../../../vroiddemo_manualoptim_1.glb");
+  avatar = model_create_file("../../../vroid_manualoptim_1_throughblender.glb");
   // avatar = model_create_file("DamagedHelmet.gltf");
   // avatar = model_create_file("Cosmonaut.glb");
+  std::unordered_map<model_node_id, matrix> avatarInitialLocalTransforms;
+  std::unordered_map<model_node_id, matrix> avatarInitialModelTransforms;
+  for (int i = 0; i < model_node_count(avatar); i++) {
+    model_node_id nodeId = model_node_id(i);
+    avatarInitialLocalTransforms[nodeId] = model_node_get_transform_local(avatar, nodeId);
+    avatarInitialModelTransforms[nodeId] = model_node_get_transform_model(avatar, nodeId);
+  }
+
 
   // LOGD("\nAnimation count: %d", model_anim_count(avatar));
   // for(int i = 0; i < model_anim_count(avatar); i++) {
@@ -180,7 +190,7 @@ int main(int argc, char *argv[]) {
   cube_pose = {{0,0,-0.5f}, quat_identity};
   // cube_pose = {{0,-2.5, 0}, quat_identity};
   // cube_pose = {{-2.5,0,0}, quat_identity};
-  cube_mesh = mesh_gen_rounded_cube(vec3_one * 0.03f, 0.02f, 4);
+  cube_mesh = mesh_gen_rounded_cube(vec3_one * 0.03f * 1, 0.02f, 4);
   cube_mat  = material_find        (default_id_material);
 
   tex_t cameraTex = tex_create(tex_type_image, tex_format_rgba32);
@@ -193,8 +203,6 @@ int main(int argc, char *argv[]) {
   MLHeadTrackingStaticData head_static_data_;
   MLHeadTrackingCreate(&head_tracker_);
   MLHeadTrackingGetStaticData(head_tracker_, &head_static_data_);
-
-
 
   PoseModel *poseModel = nullptr;
   int frameNum = 0;
@@ -222,7 +230,6 @@ int main(int argc, char *argv[]) {
     // ui_handle_begin("Cube", cube_pose, mesh_get_bounds(cube_mesh), false);
     // ui_handle_end();
 
-    model_draw(avatar,  pose_matrix({{0,-0.8,-2.5f}, quat_identity}, vec3_one * 0.99f));
     vec3 hudItemPos = (head_quat * vec3({-0.2, 0.2, -1})) + head_pos;
     render_add_mesh(desktop_mesh, desktop_material, pose_matrix({hudItemPos, head_quat}, vec3_one * 1));
 
@@ -243,8 +250,6 @@ int main(int argc, char *argv[]) {
       if (foundPerson) {
         // Only update poseWorld if found person (otherwise will be moving old pose w/ current head pos)
 
-        // TODO: probably want camera pos + rotation, not head pos. Also, clean up the camera->world transform math
-        // TODO: only update position when have new pose. On off-frames, keep last world-position (don't follow head)
         // Stereokit uses row-major, local-on-left. GL uses row-major, local-on-right. Torch uses row-major.
         // Local-on-left because DirectX uses version of transform-matrix that looks transpose from standard, and it's like [1x4] * [matrix^T] instead of [4x1] * [matrix]. Stereokit uses DirectX transform-matrix construction functions, so it's local-on-left.
         // See http://davidlively.com/programming/graphics/opengl-matrices/row-major-vs-column-major/
@@ -272,12 +277,13 @@ int main(int argc, char *argv[]) {
         b1 = poseXYOnCameraPlane[12][0].item<float>();
         b2 = poseXYOnCameraPlane[12][1].item<float>();
         b3 = poseXYOnCameraPlane[12][2].item<float>();
-        l = 0.35; // 0.35 meter shoulder-distance target
+        l = 0.31; // 0.31 meter shoulder-distance target
         float estDistFromCamera = targetLengthDistCalc(z1, z2, a1, a2, a3, b1, b2, b3, l);
+        // float estDistFromCamera = 2.0;
 
         poseRelativeToCamera += estDistFromCamera * poseXYOnCameraPlane;
-        float newShoulderDist = torch::norm(poseRelativeToCamera[11] - poseRelativeToCamera[12]).item<float>();
-        std::cout << "Shoulder dist of pose, this should be constant" << newShoulderDist << std::endl;
+        // float newShoulderDist = torch::norm(poseRelativeToCamera[11] - poseRelativeToCamera[12]).item<float>();
+        // std::cout << "Shoulder dist of pose, this should be constant" << newShoulderDist << std::endl;
 
         matrix physicalCameraToWorldSpaceMat = pose_matrix({imgCamTrans_pos, imgCamTrans_quat}, vec3_one);
         torch::Tensor physicalCameraToWorldSpace = torch::from_blob(physicalCameraToWorldSpaceMat.m, {4,4}, torch::kFloat); // this is the same as the sk matrix and we can use it as [nx4] * [matrix]
@@ -301,6 +307,121 @@ int main(int argc, char *argv[]) {
       line_add(p1, p2, {200,100,0,255}, {200,100,0,255}, 0.01f);
     }
 
+    auto tensorToVec3 = [](torch::Tensor t) {
+      return *reinterpret_cast<vec3*>(t.data_ptr());
+    };
+    // Note: REQUIRES orthorgonal vectors, or rets NaN in the matrix
+    auto quatFromNewBasis = [](vec3 x, vec3 y, vec3 z) {
+      x = vec3_normalize(x);
+      y = vec3_normalize(y);
+      z = vec3_normalize(z);
+      matrix m = matrix{ 
+        x.x, x.y, x.z, 0, 
+        y.x, y.y, y.z, 0, 
+        z.x, z.y, z.z, 0, 
+        0,   0,   0,   1
+      };
+      quat q = matrix_extract_rotation(m);
+      return q;
+    };
+    // lambda that returns reference to vec3. Don't use reference, because it gets invalidated at some point(?) not sure
+    auto poseWorldVecs = [&](int i) -> vec3 {
+      return tensorToVec3(poseWorld.index({i, Slice()}));
+    };
+    auto quatBetweenVecs = [&](vec3 a, vec3 b) {
+      // Shortest rotation from a to b. doesn't do spinning either.
+      vec3 axis = vec3_cross(a, b);
+      float w = (vec3_magnitude(a) * vec3_magnitude(b)) + vec3_dot(a, b);
+      quat q = {axis.x, axis.y, axis.z, w};
+      quat qOut = quat_normalize(q);
+      return qOut;
+    };
+
+    // _t means target, and we'll try to apply these targets to the pose of the avatar
+    // Aligning by imagining case where both person and avatar are facing towards camera (but it's actually away from camera?)
+    vec3 hipsCenter_t = (poseWorldVecs(23) + poseWorldVecs(24)) / 2;  
+    vec3 shouldersCenter_t = (poseWorldVecs(11) + poseWorldVecs(12)) / 2;
+    vec3 acrossHips_t = poseWorldVecs(23) - poseWorldVecs(24); // towards +x
+    vec3 upHips_t = shouldersCenter_t - hipsCenter_t; // towards +y
+    vec3 outHips_t = vec3_cross(acrossHips_t, upHips_t); // towards +z
+    vec3 orthogonalHipPlane_t = vec3_cross(outHips_t, acrossHips_t); // towards +y
+    // Assumes that w/ hips with localTransform=identity, the model is facing towards +z (i.e. towards camera in SK case)
+    quat hipsRot_initial = quat_from_angles(0, 0, 180);
+    // std::cout << "acroships_t: " << acrossHips_t.x << " " << acrossHips_t.y << " " << acrossHips_t.z << std::endl;
+    // std::cout << "uphips_t: " << upHips_t.x << " " << upHips_t.y << " " << upHips_t.z << std::endl;
+    // std::cout << "crosships_t: " << crossHips_t.x << " " << crossHips_t.y << " " << crossHips_t.z << std::endl;
+    quat hipsRot = quatFromNewBasis(acrossHips_t, orthogonalHipPlane_t, outHips_t);
+    torch::Tensor hipPosTensor = (poseWorld.index({23, Slice()}) + poseWorld.index({24, Slice()})) / 2;
+    vec3 hipPos = tensorToVec3(hipPosTensor);
+
+    // TODO: all this is stateful, so have to do following hierarchy from parent to child. also does alot of extra matrix mults, might be fine though.
+    model_node_id hipsNode = model_node_find(avatar, "J_Bip_C_Hips");
+    model_node_set_transform_model(avatar, hipsNode, pose_matrix({hipPos + vec3{0, 0.12, 0}, hipsRot_initial * hipsRot}, vec3_one * 1.2));
+
+    auto setNodeRelativeRotationFromTPose = [&](char *nodeName, quat rotation) {
+      model_node_id modelNode = model_node_find(avatar, nodeName);
+      // Reset to t-pose rotation 
+      model_node_set_transform_local(avatar, modelNode, avatarInitialLocalTransforms[modelNode]);
+      matrix startTrans = model_node_get_transform_model(avatar, modelNode);
+      // Apply our global rotation to joint
+      matrix newTrans = matrix_trs(matrix_extract_translation(startTrans), matrix_extract_rotation(startTrans) * rotation, matrix_extract_scale(startTrans));
+      model_node_set_transform_model(avatar, modelNode, newTrans);
+    };
+    setNodeRelativeRotationFromTPose("J_Bip_R_UpperArm", quatBetweenVecs(
+      poseWorldVecs(12) - poseWorldVecs(11),
+      poseWorldVecs(14) - poseWorldVecs(12)
+    ));
+    setNodeRelativeRotationFromTPose("J_Bip_R_LowerArm", quatBetweenVecs(
+      poseWorldVecs(14) - poseWorldVecs(12),
+      poseWorldVecs(16) - poseWorldVecs(14)
+    ));
+    setNodeRelativeRotationFromTPose("J_Bip_L_UpperArm", quatBetweenVecs(
+      poseWorldVecs(11) - poseWorldVecs(12),
+      poseWorldVecs(13) - poseWorldVecs(11)
+    ));
+    setNodeRelativeRotationFromTPose("J_Bip_L_LowerArm", quatBetweenVecs(
+      poseWorldVecs(13) - poseWorldVecs(11),
+      poseWorldVecs(15) - poseWorldVecs(13)
+    ));
+    setNodeRelativeRotationFromTPose("J_Bip_R_UpperLeg", quatBetweenVecs(
+      -upHips_t,
+      poseWorldVecs(26) - poseWorldVecs(24)
+    ));
+    setNodeRelativeRotationFromTPose("J_Bip_R_LowerLeg", quatBetweenVecs(
+      poseWorldVecs(26) - poseWorldVecs(24),
+      poseWorldVecs(28) - poseWorldVecs(26)
+    ));
+    setNodeRelativeRotationFromTPose("J_Bip_L_UpperLeg", quatBetweenVecs(
+      -upHips_t,
+      poseWorldVecs(25) - poseWorldVecs(23)
+    ));
+    setNodeRelativeRotationFromTPose("J_Bip_L_LowerLeg", quatBetweenVecs(
+      poseWorldVecs(25) - poseWorldVecs(23),
+      poseWorldVecs(27) - poseWorldVecs(25)
+    ));
+
+    // line_add(poseWorldVecs(12), testVec1+poseWorldVecs(12), {200,0,0,255}, {200,0,0,255}, 0.01f);
+    // line_add(poseWorldVecs(12), testVec2+poseWorldVecs(12), {10,255,0,255}, {10,255,0,255}, 0.02f);
+    // line_add(poseWorldVecs(12), testVec3+poseWorldVecs(12), {200,255,0,255}, {200,255,0,255}, 0.02f);
+
+
+    model_draw(avatar,  pose_matrix({{0, 0, 0}, quat_identity}, vec3_one * 1.0));
+    // render_add_mesh(cube_mesh, cube_mat, rShoulderGlobalTransform);
+
+    // if (frameNum == 1) {
+    //   model_node_id nodeId = 0;
+    //   std::cout << "\n\nTraversing";
+    //   std::cout << model_node_get_name(avatar, 0) << std::endl;
+    //   while (nodeId != -1) {
+    //     nodeId = model_node_iterate(avatar, nodeId);
+    //     if (nodeId != -1) {
+    //       std::cout << model_node_get_name(avatar, nodeId) << std::endl;
+    //       matrix localTransform = model_node_get_transform_local(avatar, nodeId);
+    //       // torch::Tensor localTransformTorch = torch::from_blob(localTransform.m, {4,4}, torch::kFloat);
+    //       // std::cout << localTransformTorch << std::endl;
+    //     }
+    //   }
+    // }
 
 
 
