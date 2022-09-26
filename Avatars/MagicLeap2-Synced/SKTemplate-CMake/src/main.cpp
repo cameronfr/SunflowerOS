@@ -294,7 +294,7 @@ int main(int argc, char *argv[]) {
     auto poseOnWorldData = poseWorld.accessor<float, 2>();
     for (int i = 0; i < poseWorld.size(0); i++) {
       vec3 pos = {poseOnWorldData[i][0], poseOnWorldData[i][1], poseOnWorldData[i][2]};
-      render_add_mesh(cube_mesh, cube_mat, pose_matrix({pos, quat_identity}, vec3_one));
+      // render_add_mesh(cube_mesh, cube_mat, pose_matrix({pos, quat_identity}, vec3_one));
     }
 
     // GHUM hierarchy
@@ -356,7 +356,7 @@ int main(int argc, char *argv[]) {
 
     // TODO: all this is stateful, so have to do following hierarchy from parent to child. also does alot of extra matrix mults, might be fine though.
     model_node_id hipsNode = model_node_find(avatar, "J_Bip_C_Hips");
-    model_node_set_transform_model(avatar, hipsNode, pose_matrix({hipPos + vec3{0, 0.12, 0}, hipsRot_initial * hipsRot}, vec3_one * 1.2));
+    model_node_set_transform_model(avatar, hipsNode, pose_matrix({hipPos + vec3{0, 0.12, 0}, hipsRot_initial * hipsRot}, vec3_one * 1.15));
 
     auto setNodeRelativeRotationFromTPose = [&](char *nodeName, quat rotation) {
       model_node_id modelNode = model_node_find(avatar, nodeName);

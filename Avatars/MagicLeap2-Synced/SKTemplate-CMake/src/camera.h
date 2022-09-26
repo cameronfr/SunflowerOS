@@ -272,7 +272,8 @@ private:
 
     MLCameraConnectContext camera_connect_context = {};
     MLCameraConnectContextInit(&camera_connect_context);
-    camera_connect_context.cam_id = MLCameraIdentifier_MAIN;
+    // camera_connect_context.cam_id = MLCameraIdentifier_MAIN;
+    camera_connect_context.cam_id = MLCameraIdentifier_CV;
     camera_connect_context.flags = MLCameraConnectFlag_CamOnly;
     camera_connect_context.enable_video_stab = false;
     res = MLCameraConnect(&camera_connect_context, &recorder_camera_context_);
@@ -295,7 +296,7 @@ private:
       return;
     }
     CameraForCV *this_app = static_cast<CameraForCV *>(device_availability_info->user_data);
-    if (this_app && device_availability_info->cam_id == MLCameraIdentifier_MAIN)
+    if (this_app && device_availability_info->cam_id == MLCameraIdentifier_CV)
     {
       this_app->recorder_camera_device_available_ = is_available;
       this_app->camera_device_available_condition_.notify_one();
