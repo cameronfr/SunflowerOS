@@ -42,7 +42,7 @@ jint JNI_OnLoad_L(JavaVM* vm, void* reserved) {
 ////////////////////////////////////
 
 void launchRunnerActivity(char *libName) {
-    printf("%s", libName);
+  printf("%s", libName);
   JNIEnv *env;
   int result = (*android_java_vm)->GetEnv(android_java_vm, (void **)&env, JNI_VERSION_1_6);
   if (result != JNI_OK) {
@@ -54,8 +54,17 @@ void launchRunnerActivity(char *libName) {
   jmethodID getApplication = (*env)->GetMethodID(env,activityThread, "getApplication", "()Landroid/app/Application;");
   jobject context_inst = (*env)->CallObjectMethod(env,at, getApplication);
   jobject context = context_inst;
-
   jclass native_context = (*env)->GetObjectClass(env, context);
+
+  // Broadcast a shutdown intent to current runner
+  // jclass intentClass1 = (*env)->FindClass(env, "android/content/Intent");
+  // jmethodID intentConstructor = (*env)->GetMethodID(env, intentClass1, "<init>", "(Ljava/lang/String;)V");
+  // jstring action = (*env)->NewStringUTF(env, "com.termux.app.RUNNER_SHUTDOWN");
+  // jobject intent1 = (*env)->NewObject(env, intentClass1, intentConstructor, action);
+  // jmethodID sendBroadcast = (*env)->GetMethodID(env, native_context, "sendBroadcast", "(Landroid/content/Intent;)V");
+  // (*env)->CallVoidMethod(env, context, sendBroadcast, intent1);
+  // LOGI("Sent shutdown intent");
+
   jclass intentClass = (*env)->FindClass(env, "android/content/Intent");
   jclass actionString = (*env)->FindClass(env, "com/termux/SandboxRunner");
   jmethodID newIntent = (*env)->GetMethodID(env, intentClass, "<init>", "(Landroid/content/Context;Ljava/lang/Class;)V");
@@ -187,7 +196,7 @@ static int create_subprocess(JNIEnv* env,
         return throw_runtime_exception(env, "Fork failed");
     } else if (pid > 0) {
         *pProcessId = (int) pid;
-        //launchRunnerActivity("/data/data/com.termux/files/home/MagicLeap2-Synced/feature_testing/libFeatureTestLib.so");
+        launchRunnerActivity("/data/data/com.termux/files/home/MagicLeap2-Synced/feature_testing/libFeatureTestLib.so");
         //launchWithDLOpen("/data/data/com.termux/files/home/MagicLeap2-Synced/feature_testing/libFeatureTestLib.so");
 
         launchDLOPENSocketServer();

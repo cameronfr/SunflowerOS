@@ -72,27 +72,22 @@ android:sharedUserLabel="@string/shared_user_label">
     android:theme="@style/Theme.TermuxApp.DayNight.DarkActionBar"
     tools:targetApi="m">
 
-    <meta-data
-        android:name="com.magicleap.augmented_reality_only"
-        android:value="true" />
-
+<!--    finishOnTaskLaunch:true-->
     <activity
         android:name=".SandboxRunner"
         android:label="SandboxRunner"
         android:configChanges="orientation|keyboardHidden"
-        android:launchMode="singleTask"
+        android:launchMode="standard"
         android:process=":sandbox_runner">
-        <meta-data
-            android:name="com.magicleap.augmented_reality_only"
-            android:value="true" />
+        <meta-data android:name="com.magicleap.augmented_reality_only" android:value="true" />
     </activity>
 
+<!--    android:launchMode="singleTask"-->
     <activity
         android:name=".app.TermuxActivity"
         android:exported="true"
         android:configChanges="orientation|screenSize|smallestScreenSize|density|screenLayout|keyboard|keyboardHidden|navigation"
         android:label="@string/application_name"
-        android:launchMode="singleTask"
         android:resizeableActivity="true"
         android:theme="@style/Theme.TermuxActivity.DayNight.NoActionBar"
         tools:targetApi="n">
@@ -100,7 +95,7 @@ android:sharedUserLabel="@string/shared_user_label">
             <action android:name="android.intent.action.MAIN" />
 
             <category android:name="android.intent.category.LAUNCHER" />
-            <category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD" />
+<!--            <category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD" />-->
         </intent-filter>
         <intent-filter>
             <action android:name="android.intent.action.MAIN" />
@@ -110,9 +105,7 @@ android:sharedUserLabel="@string/shared_user_label">
         <meta-data
             android:name="android.app.shortcuts"
             android:resource="@xml/shortcuts" />
-        <meta-data
-            android:name="com.magicleap.augmented_reality_only"
-            android:value="true" />
+<!--        <meta-data android:name="com.magicleap.augmented_reality_only" android:value="true" />-->
     </activity>
 
     <activity-alias
