@@ -121,6 +121,22 @@ void launchDLOPENSocketServer() {
     }
 }
 
+void launchWithDLOpen(char *libname) {
+    void *handle = dlopen(libname, RTLD_LAZY);
+    if (handle) {
+        void (*main)() = dlsym(handle, "main");
+        if (main) {
+            // TODO: call JNI_OnLoad (?)
+            main();
+        } else {
+            LOGI("main not found");
+        }
+        dlclose(handle);
+    } else {
+        LOGI("dlopen failed because %s", dlerror());
+    }
+}
+
 static int throw_runtime_exception(JNIEnv* env, char const* message)
 {
     jclass exClass = (*env)->FindClass(env, "java/lang/RuntimeException");
@@ -171,7 +187,9 @@ static int create_subprocess(JNIEnv* env,
         return throw_runtime_exception(env, "Fork failed");
     } else if (pid > 0) {
         *pProcessId = (int) pid;
-        launchRunnerActivity("/data/data/com.termux/files/home/MagicLeap2-Synced/feature_testing/libFeatureTestLib.so");
+        //launchRunnerActivity("/data/data/com.termux/files/home/MagicLeap2-Synced/feature_testing/libFeatureTestLib.so");
+        //launchWithDLOpen("/data/data/com.termux/files/home/MagicLeap2-Synced/feature_testing/libFeatureTestLib.so");
+
         launchDLOPENSocketServer();
         // IDK where this ends up, since socket server listens forever, but guess it's not important
         return ptm;
