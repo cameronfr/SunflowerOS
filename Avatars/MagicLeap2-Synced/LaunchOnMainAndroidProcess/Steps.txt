@@ -1,0 +1,10 @@
+	⁃	launch socket server on main process (forked), listen for paths, when get path dlopen it
+	⁃	need to copy all  shared objects /system/libs to local folder in termux home because android restriction
+	⁃	e.g. if dlopen(“lib1.so”) that depends on libopenxr_magicleap.so, it’ll say not libopenxr_magicleap.so not found. But if try to directly dlopen(“libopenxr_magicleap.so”), it’ll say permission denied
+	⁃	Why can I dlopen libnativehelper.so in Termux terminal, but not in main process? Is it using a different dlopen? but it’s using libdl.so aswell  
+	⁃	libnativehelper is in /apex/com.android.runtime/lib, FML
+	⁃	readelf -d , patchelf
+	⁃	for f in ./*.so; do patchelf --set-rpath "\$ORIGIN" $f; done
+	⁃	cp -a /system/lib/. ~/runtimelibs/; cp -a /system/lib64/. ~/runtimelibs/; cp -a /apex/com.android.runtime/lib64/. ~/runtimelibs/
+	⁃	cat /system/etc/ld.config.txt
+	⁃	if was root could modify /system/etc/public.libraries.txt ; this is annoying
