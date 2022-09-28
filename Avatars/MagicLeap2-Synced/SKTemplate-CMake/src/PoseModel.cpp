@@ -23,7 +23,7 @@ using namespace torch::indexing;
 class TfLiteInterpreterWrapper {
 public:
   TfLiteInterpreterWrapper(char *modelPath) {
-    printf("TfLiteInterpreterWrapper constructor with arg\n");
+    LOGD("TfLiteInterpreterWrapper constructor with arg\n");
     model = TfLiteModelCreateFromFile(modelPath);
     options = TfLiteInterpreterOptionsCreate();
     // Enable gpu delegate
@@ -40,7 +40,7 @@ public:
   }
 
   ~TfLiteInterpreterWrapper() {
-    printf("TfLiteInterpreterWrapper destructor\n");
+    LOGD("TfLiteInterpreterWrapper destructor\n");
     TfLiteInterpreterDelete(interpreter);
     TfLiteInterpreterOptionsDelete(options);
     TfLiteModelDelete(model);
@@ -62,7 +62,7 @@ public:
       main_keypoints_filter.Initialize(0, torch::zeros({33, 5}), torch::zeros({33, 5}), 0.005, 0.03875, 1.0);
       aux_keypoints_filter.Initialize(0, torch::zeros({2, 5}), torch::zeros({2, 5}), 0.1, 0.8, 1.0);
       pose_detection_anchors = GenerateAnchors();
-      printf("Person Detec Anchors Count : %d\n", pose_detection_anchors.size(0));
+      LOGD("Person Detec Anchors Count : %d\n", pose_detection_anchors.size(0));
       latestPose = torch::zeros({33, 3}); //x,y,z in image coordinates;
       // TfLiteInterpreter* pose_tflite_interpreter = CreateTfLiteInterpreter("/data/data/com.termux/files/home/MagicLeap2-Synced/models/pose_landmark_lite.tflite");
   }
@@ -129,7 +129,7 @@ public:
 
       return std::make_tuple(padded, coordMapFn);
     } else {
-      printf("UNIMPLEMENTED\n");
+      LOGD("UNIMPLEMENTED\n");
       // throw exception
       throw std::runtime_error("UNIMPLEMENTED");
     }
@@ -149,11 +149,15 @@ public:
     torch::Tensor inputTensor = resizeOutTensor.index({"...", Slice(0, 3)}).to(torch::kFloat32).div_(255.0f).sub_(0.5f).div_(0.5f); 
     int status = TfLiteTensorCopyFromBuffer(inputTensorTf, inputTensor.data_ptr(), inputTensor.nbytes());
     if (status != kTfLiteOk) {
-      printf("Error copying from buffer");
+      LOGD("Error copying from buffer");
       throw std::runtime_error("Error copying from buffer");
     }
 
-    TfLiteInterpreterInvoke(pose_detector_tflite.interpreter);
+    status = TfLiteInterpreterInvoke(pose_detector_tflite.interpreter);
+    if (status != kTfLiteOk) {
+      LOGD("Error invoking %d", status);
+      throw std::runtime_error("Error invoking");
+    }
 
     // // // Extract the output tensor data.
     torch::Tensor outputKeypoints = torch::from_blob(TfLiteInterpreterGetOutputTensor(pose_detector_tflite.interpreter, 0)->data.data, {1, 2254, 12}, torch::kFloat32).squeeze();
@@ -266,7 +270,7 @@ public:
       // std::cout << "inputTensor2: " << inputTensor2.sizes() << std::endl;
       int status = TfLiteTensorCopyFromBuffer(inputTensorTf2, inputTensor2.data_ptr(), inputTensor2.nbytes());
       if (status != kTfLiteOk) {
-        printf("Error copying from buffer");
+        LOGD("Error copying from buffer");
         throw std::runtime_error("Error copying from buffer");
       }
 

@@ -9,7 +9,6 @@
 #include <signal.h>
 // Android logging include
 #include <android/log.h>
-// #include <jni.h>
 #define LOG_TAG "SunflowerOS"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 
@@ -19,7 +18,28 @@
 #include <ml_perception.h>
 #include <ml_raycast.h>
 
+#include <unistd.h>
 #include <dlfcn.h>
+
+#include <jni.h>
+
+JavaVM *android_vm = NULL;
+jobject android_activity = NULL;
+
+extern "C" jint JNI_OnLoad(JavaVM *vm, void *reserved) {
+    android_vm = vm;
+    // Get activity we're running in
+    JNIEnv *env;
+    vm->GetEnv((void **)&env, JNI_VERSION_1_6);
+    jclass activity_thread = env->FindClass("android/app/ActivityThread");
+    jmethodID current_activity_thread = env->GetStaticMethodID(activity_thread, "currentActivityThread", "()Landroid/app/ActivityThread;");
+    jobject at = env->CallStaticObjectMethod(activity_thread, current_activity_thread);
+    jmethodID get_application = env->GetMethodID(activity_thread, "getApplication", "()Landroid/app/Application;");
+    jobject activity_inst = env->CallObjectMethod(at, get_application);
+    android_activity = env->NewGlobalRef(activity_inst);
+    LOGD("In JNI_Onload, Activity: %p VM %p", android_activity, android_vm);
+    return JNI_VERSION_1_6;
+}
 
 
 using namespace sk;
@@ -80,6 +100,7 @@ template <typename T> void print(const char *m, T t) {
   os << t << std::endl;
   LOGD("%s %s", m, os.str().c_str());
 }
+
 extern int main(int argc, char *argv[]);
 
 void signal_callback_handler(int signum) {
@@ -133,30 +154,28 @@ void doRaycastTest() {
 
 int main(int argc, char *argv[]) {
 
-  // torch::Tensor a = at::ones({2, 2}, at::kInt);
-  // torch::Tensor b = at::randn({2, 2});
-  // auto c = a + a + b.to(at::kInt);
-  // print("t:", b);
-
   signal(SIGINT, signal_callback_handler);
   sk_settings_t settings = {};
+  LOGD("In main, Activity: %p VM %p", android_activity, android_vm);
+  settings.android_java_vm = (void *)android_vm;
+  settings.android_activity = (void *)android_activity;
+
 	settings.app_name           = "SunflowerOS v0.1";
 	settings.assets_folder      = "/data/data/com.termux/files/home/MagicLeap2-Synced/StereoKit/Examples/Assets/";
-	// settings.display_preference = display_mode_mixedreality;
-	settings.display_preference = display_mode_flatscreen;
+	settings.display_preference = display_mode_mixedreality;
+	// settings.display_preference = display_mode_flatscreen;
 
-	if (!sk_init(settings)) return 1;
-
-  // get sk_get_settings fn
-  // sk_settings_t (*sk_get_settings)() = (sk_settings_t (*)())dlsym(RTLD_DEFAULT, "sk_get_settings");
-  // sk_settings_t test = sk_get_settings();
-  // printf("test: %s\n", test.app_name);
+  LOGD("Initializing SK");
+	if (!sk_init(settings)) {
+    LOGD("SK Init failed");
+    return 1;
+  }
 
   // Initialize camera
-  camera.Initialize();
-  LOGD("Camera initialized");
-  camera.Start();
-  LOGD("Camera started");  
+  // camera.Initialize();
+  // LOGD("Camera initialized");
+  // camera.Start();
+  // LOGD("Camera started");  
 
   // -Z forwards, +Y up, +X right
   // camInfo.transform has same coord system, but Magic leap proj must be changing it
@@ -199,17 +218,28 @@ int main(int argc, char *argv[]) {
 	mesh_t desktop_mesh = mesh_gen_plane({0.2*1.0, 0.2}, { 0,0,1 }, {0,1,0}); 
 
   // Inits for magic leap head tracking api
-  MLHandle head_tracker_;
-  MLHeadTrackingStaticData head_static_data_;
-  MLHeadTrackingCreate(&head_tracker_);
-  MLHeadTrackingGetStaticData(head_tracker_, &head_static_data_);
+  // MLHandle head_tracker_;
+  // MLHeadTrackingStaticData head_static_data_;
+  // MLHeadTrackingCreate(&head_tracker_);
+  // MLHeadTrackingGetStaticData(head_tracker_, &head_static_data_);
 
   PoseModel *poseModel = nullptr;
   int frameNum = 0;
 
   torch::Tensor poseWorld = torch::zeros({33, 3});
 
+
+  // For UI Testing
+	model_t gltf = model_create_file("DamagedHelmet.gltf");
+  struct phys_obj_t {
+    solid_t solid;
+    float   scale;
+  };
+  std::vector<phys_obj_t> phys_objs;
+  pose_t tr;
+
   static auto update = [&]() {
+    /*
     if (frameNum % (60*240) == 0) {
       if (poseModel != nullptr) {
         dlOpenDestroyClass("libPoseModel.so", poseModel);
@@ -243,11 +273,13 @@ int main(int argc, char *argv[]) {
       bool foundPerson;
       try {
         // This method must be virtual if want it to be updated on dlopen
+        // tex_set_colors(cameraTex, 1280, 960, cameraImg.data_ptr());
         foundPerson = poseModel->ProcessImage(cameraImg, cameraTex);
       } catch (const std::exception& e) {
         LOGD("Exception: %s", e.what());
       }
       if (foundPerson) {
+        LOGD("Found person: %d", foundPerson);
         // Only update poseWorld if found person (otherwise will be moving old pose w/ current head pos)
 
         // Stereokit uses row-major, local-on-left. GL uses row-major, local-on-right. Torch uses row-major.
@@ -425,11 +457,48 @@ int main(int argc, char *argv[]) {
 
 
 
-    // tex_set_colors(cameraTex, 1280, 960, camera.GetOutput().data_ptr());
     // render_add_mesh(desktop_mesh, desktop_material, pose_matrix({2,+0.8,-2.5f}, vec3_one * 1));
     // render_add_mesh(desktop_mesh, desktop_material, pose_matrix({4,+0.4,-2.5f}, vec3_one * 1));
     // render_add_mesh(desktop_mesh, desktop_material, pose_matrix({0,+0.8,-2.5f}, vec3_one * 1));
-    // render_add_mesh(desktop_mesh, desktop_material, pose_matrix({6,+0.6,-2.5f}, vec3_one * 1));
+    // render_add_mesh(desktop_mesh, desktop_material, pose_matrix({6,+0f.6,-2.5f}, vec3_one * 1));
+
+    */
+
+    static pose_t window_pose = //pose_t{ vec3{1,1,1} * 0.9f, quat_lookat({1,1,1}, {0,0,0}) };
+		pose_t{ {0,0,-0.25f}, quat_lookat({0,0,-0.25f}, {0,0,0}) };
+    ui_window_begin("Options", window_pose, vec2{ 24 }*cm2m);
+    
+    static float scale = 0.25f;
+    ui_hslider("scale", scale, 0.05f, 0.25f, 0, 72 * mm2m); ui_sameline();
+    ui_model(gltf, vec2{ 40,10 }*mm2m, scale*0.1f);
+
+    static bool pressed = false;
+    if (ui_button("Spawn")) {
+      if (!pressed) {
+        pressed = true;
+        solid_t new_obj = solid_create({ 0,1,0 }, quat_identity);
+        solid_add_sphere(new_obj, 1.8f * scale, 40);
+        solid_add_box(new_obj, vec3_one * 1.4f * scale, 40);
+        phys_objs.push_back({ new_obj, scale });
+      }
+    } else {
+      pressed = false;
+    }
+    ui_sameline();
+    if (ui_button("Clear")) {
+      for (size_t i = 0; i < phys_objs.size(); i++)
+        solid_release(phys_objs[i].solid);
+      phys_objs.clear();
+    }
+
+    ui_window_end();
+
+    // Render solid helmets
+    for (size_t i = 0; i < phys_objs.size(); i++) {
+      solid_get_pose  (phys_objs[i].solid, tr);
+      model_draw(gltf, pose_matrix(tr, vec3_one * phys_objs[i].scale));
+    }
+    // LOGD("Loop ran");
   };
   auto update_ptr = []() { update(); };
 

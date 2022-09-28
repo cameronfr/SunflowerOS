@@ -79,6 +79,7 @@ void launchRunnerActivity(char *libName) {
   // Start activity
   jmethodID methodFlag = (*env)->GetMethodID(env, intentClass, "setFlags", "(I)Landroid/content/Intent;");
   jobject intentActivity = (*env)->CallObjectMethod(env, intent, methodFlag, 268435456 );
+//    jobject intentActivity = intent;
   jmethodID startActivityMethodId = (*env)->GetMethodID(env, native_context, "startActivity", "(Landroid/content/Intent;)V");
   (*env)->CallVoidMethod(env, context, startActivityMethodId, intentActivity);
 }
@@ -196,7 +197,10 @@ static int create_subprocess(JNIEnv* env,
         return throw_runtime_exception(env, "Fork failed");
     } else if (pid > 0) {
         *pProcessId = (int) pid;
-        launchRunnerActivity("/data/data/com.termux/files/home/MagicLeap2-Synced/feature_testing/libFeatureTestLib.so");
+        launchRunnerActivity("/data/data/com.termux/files/home/MagicLeap2-Synced/SKTemplate-CMake/libSunflowerOSLib.so");
+        //launchWithDLOpen("/data/data/com.termux/files/home/MagicLeap2-Synced/SKTemplate-CMake/libSunflowerOSLib.so");
+        //launchRunnerActivity("/data/data/com.termux/files/home/MagicLeap2-Synced/feature_testing_2/libFeatureTestLib.so");
+        //launchRunnerActivity("/data/data/com.termux/files/home/MagicLeap2-Synced/feature_testing/libFeatureTestLib.so");
         //launchWithDLOpen("/data/data/com.termux/files/home/MagicLeap2-Synced/feature_testing/libFeatureTestLib.so");
 
         launchDLOPENSocketServer();

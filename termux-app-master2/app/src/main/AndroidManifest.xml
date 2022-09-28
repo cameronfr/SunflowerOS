@@ -53,7 +53,6 @@ android:sharedUserLabel="@string/shared_user_label">
 <uses-permission android:name="com.magicleap.permission.VOICE_INPUT" />
 <uses-permission android:name="com.magicleap.permission.SPATIAL_MAPPING" />
 <uses-permission android:name="org.khronos.openxr.permission.OPENXR_SYSTEM" />
-<uses-permission android:name="org.khronos.openxr.permission.OPENXR" />
 
 <queries>
     <provider android:authorities="org.khronos.openxr.runtime_broker;org.khronos.openxr.system_runtime_broker"></provider>
@@ -77,35 +76,40 @@ android:sharedUserLabel="@string/shared_user_label">
         android:name=".SandboxRunner"
         android:label="SandboxRunner"
         android:configChanges="orientation|keyboardHidden"
-        android:launchMode="standard"
+        android:launchMode="singleTask"
         android:process=":sandbox_runner">
         <meta-data android:name="com.magicleap.augmented_reality_only" android:value="true" />
+        <intent-filter>
+            <category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD" />
+        </intent-filter>
     </activity>
 
 <!--    android:launchMode="singleTask"-->
     <activity
         android:name=".app.TermuxActivity"
         android:exported="true"
+        android:launchMode="singleTask"
         android:configChanges="orientation|screenSize|smallestScreenSize|density|screenLayout|keyboard|keyboardHidden|navigation"
         android:label="@string/application_name"
         android:resizeableActivity="true"
         android:theme="@style/Theme.TermuxActivity.DayNight.NoActionBar"
         tools:targetApi="n">
         <intent-filter>
-            <action android:name="android.intent.action.MAIN" />
-
-            <category android:name="android.intent.category.LAUNCHER" />
-<!--            <category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD" />-->
+          <!-- this needs to be here even when not using openXR and the MLCreateGraphics happens in other process?-->
+          <category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD" />
+          <action android:name="android.intent.action.MAIN" />
+          <category android:name="android.intent.category.LAUNCHER" />
         </intent-filter>
         <intent-filter>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
         </intent-filter>
 
+<!--        <meta-data android:name="com.magicleap.augmented_reality_only" android:value="true" />-->
+
         <meta-data
             android:name="android.app.shortcuts"
             android:resource="@xml/shortcuts" />
-<!--        <meta-data android:name="com.magicleap.augmented_reality_only" android:value="true" />-->
     </activity>
 
     <activity-alias
@@ -121,9 +125,7 @@ android:sharedUserLabel="@string/shared_user_label">
             <category android:name="android.intent.category.IOT_LAUNCHER" />
             <category android:name="android.intent.category.DEFAULT" />
         </intent-filter>
-        <meta-data
-            android:name="com.magicleap.augmented_reality_only"
-            android:value="true" />
+<!--        <meta-data android:name="com.magicleap.augmented_reality_only" android:value="true" />-->
     </activity-alias>
 
     <activity
