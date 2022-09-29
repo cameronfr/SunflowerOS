@@ -11,6 +11,7 @@ import android.os.Bundle;
 public class SandboxRunner extends AppCompatActivity {
 
   private native void loadNativeCode(String path, String funcname);
+  private Thread appThread;
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
@@ -32,31 +33,24 @@ public class SandboxRunner extends AppCompatActivity {
 
     Bundle b = getIntent().getExtras();
     String libName = b.getString("libName");
-
-    // Thread t = new Thread(new Runnable() {
-    //   @Override
-    //   public void run() {
-        // System.out.println("SandboxRunner: thread starting, libName=" + libName);
-    //     // If load the code in new thread, if the code segfaults the activity exits more gracefully.
-        // System.loadLibrary("sandbox_runner");
-        // loadNativeCode(libName, "main");
-        // System.out.println("SandboxRunner: thread done");
-    //     finish();
-    //   }
-    // });
-    // System.out.println("SandboxRunner: IN UI thread, starting runner thread " + libName);
-    // t.start();
+    Thread t = new Thread(new Runnable() {
+      @Override
+      public void run() {
+        System.out.println("SandboxRunner: thread starting, libName=" + libName);
+        System.loadLibrary("sandbox_runner");
+        loadNativeCode(libName, "main");
+        System.out.println("SandboxRunner: thread done");
+        finish();
+      }
+    });
+    t.start();
   }
 
   @Override
-  protected void onStart() {
-    super.onStart();
+  protected void onResume() {
+    super.onResume();
     Bundle b = getIntent().getExtras();
     String libName = b.getString("libName");
-    System.out.println("SandboxRunner: onStart");
-    System.loadLibrary("sandbox_runner");
-    loadNativeCode(libName, "main");
-    System.out.println("SandboxRunner: thread done");
   }
 
   @Override
@@ -69,6 +63,7 @@ public class SandboxRunner extends AppCompatActivity {
 
   @Override
   protected void onStop() {
+    super.onStop();
     System.out.println("SandboxRunner: onStop, killing process");
     android.os.Process.killProcess(android.os.Process.myPid());
   }

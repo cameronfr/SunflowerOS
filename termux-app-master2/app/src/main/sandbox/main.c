@@ -20,7 +20,6 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 JavaVM *vm = NULL;
-jobject android_activity = NULL;
 
 jint JNI_OnLoad(JavaVM *vmIn, void *reserved) {
     vm = vmIn;
@@ -39,6 +38,15 @@ Java_com_termux_SandboxRunner_loadNativeCode(JNIEnv *env, jobject thiz, jstring 
         JNI_OnLoad(vm, NULL);
       } else {
         LOGE("JNI_OnLoad not found");
+      }
+
+      // Call JNI_SetActivity (not standard)
+      void (*JNI_SetActivity)(jobject) = (void (*)(jobject)) dlsym(handle, "JNI_SetActivity");
+      if (JNI_SetActivity) {
+        jobject activity = (*env)->NewGlobalRef(env, thiz);
+        JNI_SetActivity(activity); //on ML2 XrInstanceCreateInfoAndroidKHR doesn't actually care what this is (can be bogus)??
+      } else {
+        LOGE("JNI_SetActivity not found");
       }
 
       void (*mainFunc)(int, char**) = dlsym(handle, "main");

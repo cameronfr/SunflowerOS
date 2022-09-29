@@ -71,7 +71,6 @@ android:sharedUserLabel="@string/shared_user_label">
     android:theme="@style/Theme.TermuxApp.DayNight.DarkActionBar"
     tools:targetApi="m">
 
-<!--    finishOnTaskLaunch:true-->
     <activity
         android:name=".SandboxRunner"
         android:label="SandboxRunner"
@@ -84,7 +83,6 @@ android:sharedUserLabel="@string/shared_user_label">
         </intent-filter>
     </activity>
 
-<!--    android:launchMode="singleTask"-->
     <activity
         android:name=".app.TermuxActivity"
         android:exported="true"
@@ -95,8 +93,7 @@ android:sharedUserLabel="@string/shared_user_label">
         android:theme="@style/Theme.TermuxActivity.DayNight.NoActionBar"
         tools:targetApi="n">
         <intent-filter>
-          <!-- this needs to be here even when not using openXR and the MLCreateGraphics happens in other process?-->
-          <category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD" />
+<!--          <category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD" />-->
           <action android:name="android.intent.action.MAIN" />
           <category android:name="android.intent.category.LAUNCHER" />
         </intent-filter>

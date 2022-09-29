@@ -56,6 +56,10 @@ void launchRunnerActivity(char *libName) {
   jobject context = context_inst;
   jclass native_context = (*env)->GetObjectClass(env, context);
 
+  // Get activity context (not application context). We're in an AppCompatActivity
+  // jmethodID getApplicationContext = (*env)->GetMethodID(env, native_context, "getApplicationContext", "()Landroid/content/Context;");
+  // jobject activity_context = (*env)->CallObjectMethod(env, context, getApplicationContext);
+
   // Broadcast a shutdown intent to current runner
   // jclass intentClass1 = (*env)->FindClass(env, "android/content/Intent");
   // jmethodID intentConstructor = (*env)->GetMethodID(env, intentClass1, "<init>", "(Ljava/lang/String;)V");
@@ -78,8 +82,8 @@ void launchRunnerActivity(char *libName) {
 
   // Start activity
   jmethodID methodFlag = (*env)->GetMethodID(env, intentClass, "setFlags", "(I)Landroid/content/Intent;");
-  jobject intentActivity = (*env)->CallObjectMethod(env, intent, methodFlag, 268435456 );
-//    jobject intentActivity = intent;
+  jobject intentActivity = (*env)->CallObjectMethod(env, intent, methodFlag, 268435456 ); //FLAG_ACTIVITY_NEW_TASK
+//  jobject intentActivity = (*env)->CallObjectMethod(env, intent, methodFlag, 67108864 ); //FLAG_ACTIVITY_CLEAR_TOP
   jmethodID startActivityMethodId = (*env)->GetMethodID(env, native_context, "startActivity", "(Landroid/content/Intent;)V");
   (*env)->CallVoidMethod(env, context, startActivityMethodId, intentActivity);
 }
@@ -197,13 +201,13 @@ static int create_subprocess(JNIEnv* env,
         return throw_runtime_exception(env, "Fork failed");
     } else if (pid > 0) {
         *pProcessId = (int) pid;
-        launchRunnerActivity("/data/data/com.termux/files/home/MagicLeap2-Synced/SKTemplate-CMake/libSunflowerOSLib.so");
+        //launchRunnerActivity("/data/data/com.termux/files/home/MagicLeap2-Synced/SKTemplate-CMake/libSunflowerOSLib.so");
         //launchWithDLOpen("/data/data/com.termux/files/home/MagicLeap2-Synced/SKTemplate-CMake/libSunflowerOSLib.so");
         //launchRunnerActivity("/data/data/com.termux/files/home/MagicLeap2-Synced/feature_testing_2/libFeatureTestLib.so");
         //launchRunnerActivity("/data/data/com.termux/files/home/MagicLeap2-Synced/feature_testing/libFeatureTestLib.so");
         //launchWithDLOpen("/data/data/com.termux/files/home/MagicLeap2-Synced/feature_testing/libFeatureTestLib.so");
 
-        launchDLOPENSocketServer();
+        launchDLOPENSocketServer(); //this will block this activities thread
         // IDK where this ends up, since socket server listens forever, but guess it's not important
         return ptm;
     } else {
