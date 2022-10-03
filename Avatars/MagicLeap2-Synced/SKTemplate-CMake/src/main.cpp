@@ -29,16 +29,20 @@ jobject android_activity = NULL;
 extern "C" jint JNI_OnLoad(JavaVM *vm, void *reserved) {
     android_vm = vm;
     // Get activity we're running in
-    JNIEnv *env;
-    vm->GetEnv((void **)&env, JNI_VERSION_1_6);
-    jclass activity_thread = env->FindClass("android/app/ActivityThread");
-    jmethodID current_activity_thread = env->GetStaticMethodID(activity_thread, "currentActivityThread", "()Landroid/app/ActivityThread;");
-    jobject at = env->CallStaticObjectMethod(activity_thread, current_activity_thread);
-    jmethodID get_application = env->GetMethodID(activity_thread, "getApplication", "()Landroid/app/Application;");
-    jobject activity_inst = env->CallObjectMethod(at, get_application);
-    android_activity = env->NewGlobalRef(activity_inst);
+    // JNIEnv *env;
+    // vm->GetEnv((void **)&env, JNI_VERSION_1_6);
+    // jclass activity_thread = env->FindClass("android/app/ActivityThread");
+    // jmethodID current_activity_thread = env->GetStaticMethodID(activity_thread, "currentActivityThread", "()Landroid/app/ActivityThread;");
+    // jobject at = env->CallStaticObjectMethod(activity_thread, current_activity_thread);
+    // jmethodID get_application = env->GetMethodID(activity_thread, "getApplication", "()Landroid/app/Application;");
+    // jobject activity_inst = env->CallObjectMethod(at, get_application);
+    // android_activity = env->NewGlobalRef(activity_inst);
     LOGD("In JNI_Onload, Activity: %p VM %p", android_activity, android_vm);
     return JNI_VERSION_1_6;
+}
+
+extern "C" void JNI_SetActivity(jobject activity) {
+    android_activity = activity;
 }
 
 
@@ -165,17 +169,32 @@ int main(int argc, char *argv[]) {
 	settings.display_preference = display_mode_mixedreality;
 	// settings.display_preference = display_mode_flatscreen;
 
+  backend_openxr_ext_request("XR_ML_ml2_controller_interaction");
   LOGD("Initializing SK");
 	if (!sk_init(settings)) {
     LOGD("SK Init failed");
     return 1;
   }
 
+  // Initialize perception. Required before using things that depend on perception (e.g. camera pose)
+  MLPerceptionSettings perception_settings;
+  int result;
+	result = MLPerceptionInitSettings(&perception_settings);
+	if (MLResult_Ok != result) {
+		LOGD("MLPerceptionInitSettings failed with %d, exiting app", result);
+		return 1;
+	}
+	result = MLPerceptionStartup(&perception_settings);
+	if (MLResult_Ok != result) {
+		LOGD("MLPerceptionStartup failed with %d, exiting app", result);
+		return 1;
+	}
+
   // Initialize camera
-  // camera.Initialize();
-  // LOGD("Camera initialized");
-  // camera.Start();
-  // LOGD("Camera started");  
+  camera.Initialize();
+  LOGD("Camera initialized");
+  camera.Start();
+  LOGD("Camera started");  
 
   // -Z forwards, +Y up, +X right
   // camInfo.transform has same coord system, but Magic leap proj must be changing it
@@ -198,14 +217,6 @@ int main(int argc, char *argv[]) {
   }
 
 
-  // LOGD("\nAnimation count: %d", model_anim_count(avatar));
-  // for(int i = 0; i < model_anim_count(avatar); i++) {
-  //     LOGD("\nAnimation %d: %s", i, model_anim_get_name(avatar, i));
-  // }
-
-
-  // model_play_anim
-
   cube_pose = {{0,0,-0.5f}, quat_identity};
   // cube_pose = {{0,-2.5, 0}, quat_identity};
   // cube_pose = {{-2.5,0,0}, quat_identity};
@@ -218,28 +229,21 @@ int main(int argc, char *argv[]) {
 	mesh_t desktop_mesh = mesh_gen_plane({0.2*1.0, 0.2}, { 0,0,1 }, {0,1,0}); 
 
   // Inits for magic leap head tracking api
-  // MLHandle head_tracker_;
-  // MLHeadTrackingStaticData head_static_data_;
-  // MLHeadTrackingCreate(&head_tracker_);
-  // MLHeadTrackingGetStaticData(head_tracker_, &head_static_data_);
+  MLHandle head_tracker_;
+  MLHeadTrackingStaticData head_static_data_;
+  MLHeadTrackingCreate(&head_tracker_);
+  MLHeadTrackingGetStaticData(head_tracker_, &head_static_data_);
 
   PoseModel *poseModel = nullptr;
   int frameNum = 0;
 
   torch::Tensor poseWorld = torch::zeros({33, 3});
+  torch::Tensor poseVisibilities = torch::zeros({33});
 
-
-  // For UI Testing
-	model_t gltf = model_create_file("DamagedHelmet.gltf");
-  struct phys_obj_t {
-    solid_t solid;
-    float   scale;
-  };
-  std::vector<phys_obj_t> phys_objs;
-  pose_t tr;
+  int SHOW_POSE_DEBUG = 0;
 
   static auto update = [&]() {
-    /*
+    
     if (frameNum % (60*240) == 0) {
       if (poseModel != nullptr) {
         dlOpenDestroyClass("libPoseModel.so", poseModel);
@@ -261,10 +265,12 @@ int main(int argc, char *argv[]) {
     // ui_handle_end();
 
     vec3 hudItemPos = (head_quat * vec3({-0.2, 0.2, -1})) + head_pos;
-    render_add_mesh(desktop_mesh, desktop_material, pose_matrix({hudItemPos, head_quat}, vec3_one * 1));
+    if (SHOW_POSE_DEBUG) {
+      render_add_mesh(desktop_mesh, desktop_material, pose_matrix({hudItemPos, head_quat}, vec3_one * 1));
+    }
 
     // Update poseWorld
-    if (frameNum % 2 == 0) {
+    if (frameNum % 1 == 0) {
       auto cameraOut = camera.GetOutput();
       torch::Tensor cameraImg = std::get<0>(cameraOut);
       MLTransform imgCamTrans = std::get<1>(cameraOut); //must use pose at time img was taken, otherwise output will follow head
@@ -279,14 +285,15 @@ int main(int argc, char *argv[]) {
         LOGD("Exception: %s", e.what());
       }
       if (foundPerson) {
-        LOGD("Found person: %d", foundPerson);
         // Only update poseWorld if found person (otherwise will be moving old pose w/ current head pos)
 
         // Stereokit uses row-major, local-on-left. GL uses row-major, local-on-right. Torch uses row-major.
         // Local-on-left because DirectX uses version of transform-matrix that looks transpose from standard, and it's like [1x4] * [matrix^T] instead of [4x1] * [matrix]. Stereokit uses DirectX transform-matrix construction functions, so it's local-on-left.
         // See http://davidlively.com/programming/graphics/opengl-matrices/row-major-vs-column-major/
         torch::Tensor poseImageCoords = poseModel->GetLatestPose(); //33 x [x,y,z]
+        poseVisibilities = poseModel->GetLatestPoseVisibilities(); //33 x 1]
 
+        // TODO: use the per-frame camera intrinsics in MapImageCoordsToCameraCoords (not sure how much they're changing, mb when autofocus and stuff?)
         torch::Tensor poseImageZ = poseImageCoords.index({Slice(), 2});// * -1; // map coord to -Z forwards
         torch::Tensor poseXYOnCameraPlane = camera.MapImageCoordsTo3DCoords(poseImageCoords.index({Slice(), Slice(0,2)}), 1.0f);
         poseXYOnCameraPlane *= torch::from_blob((float[]){1, -1, -1}, {3}, torch::kFloat); // map coord system　to sk
@@ -309,7 +316,7 @@ int main(int argc, char *argv[]) {
         b1 = poseXYOnCameraPlane[12][0].item<float>();
         b2 = poseXYOnCameraPlane[12][1].item<float>();
         b3 = poseXYOnCameraPlane[12][2].item<float>();
-        l = 0.31; // 0.31 meter shoulder-distance target
+        l = 0.31; // 0.31 meter shoulder-distance target. TODO: use avg of bone sizes somehow.
         float estDistFromCamera = targetLengthDistCalc(z1, z2, a1, a2, a3, b1, b2, b3, l);
         // float estDistFromCamera = 2.0;
 
@@ -324,19 +331,27 @@ int main(int argc, char *argv[]) {
     }
 
     auto poseOnWorldData = poseWorld.accessor<float, 2>();
-    for (int i = 0; i < poseWorld.size(0); i++) {
-      vec3 pos = {poseOnWorldData[i][0], poseOnWorldData[i][1], poseOnWorldData[i][2]};
-      // render_add_mesh(cube_mesh, cube_mat, pose_matrix({pos, quat_identity}, vec3_one));
+    if (SHOW_POSE_DEBUG) {
+      for (int i = 0; i < poseWorld.size(0); i++) {
+        vec3 pos = {poseOnWorldData[i][0], poseOnWorldData[i][1], poseOnWorldData[i][2]};
+        render_add_mesh(cube_mesh, cube_mat, pose_matrix({pos, quat_identity}, vec3_one*0.4));
+      }
     }
 
     // GHUM hierarchy
     std::vector <std::array<int, 2>> connLines = {
       {12, 24}, {24, 26}, {26, 28}, {28, 30}, {30, 32}, {11, 23}, {23, 25}, {25, 27}, {27, 29}, {29, 31}, {11, 13}, {13, 15}, {15, 17}, {17, 19}, {15, 21}, {12, 14}, {14, 16}, {16, 18}, {18, 20}, {16, 22}, {23, 24}, {11, 12}
     };
-    for (int i = 0; i < connLines.size(); i++) {
-      vec3 p1 = *reinterpret_cast<vec3*>(poseWorld.index({connLines[i][0], Slice()}).data_ptr());
-      vec3 p2 = *reinterpret_cast<vec3*>(poseWorld.index({connLines[i][1], Slice()}).data_ptr());
-      line_add(p1, p2, {200,100,0,255}, {200,100,0,255}, 0.01f);
+    if (SHOW_POSE_DEBUG) {
+      for (int i = 0; i < connLines.size(); i++) {
+        vec3 p1 = *reinterpret_cast<vec3*>(poseWorld.index({connLines[i][0], Slice()}).data_ptr());
+        vec3 p2 = *reinterpret_cast<vec3*>(poseWorld.index({connLines[i][1], Slice()}).data_ptr());
+        float visProbP1 = poseVisibilities[connLines[i][0]].item<float>();
+        float visProbP2 = poseVisibilities[connLines[i][1]].item<float>();
+        if (std::min(visProbP1, visProbP2) > 0.6) {
+          line_add(p1, p2, {200,100,0,100}, {255,120,0,100}, 0.01f);
+        }
+      }
     }
 
     auto tensorToVec3 = [](torch::Tensor t) {
@@ -387,6 +402,21 @@ int main(int argc, char *argv[]) {
     vec3 hipPos = tensorToVec3(hipPosTensor);
 
     // TODO: all this is stateful, so have to do following hierarchy from parent to child. also does alot of extra matrix mults, might be fine though.
+
+    // Reset the model to t-pose
+    model_node_id spine = model_node_find(avatar, "J_Bip_C_Spine");
+    model_node_set_transform_local(avatar, spine, avatarInitialLocalTransforms[spine]);
+    model_node_id head = model_node_find(avatar, "J_Bip_C_Head");
+    model_node_set_transform_local(avatar, head, avatarInitialLocalTransforms[head]);
+    model_node_id leftLowerArm = model_node_find(avatar, "J_Bip_L_LowerArm");
+    model_node_set_transform_local(avatar, leftLowerArm, avatarInitialLocalTransforms[leftLowerArm]);
+    model_node_id rightLowerArm = model_node_find(avatar, "J_Bip_R_LowerArm");
+    model_node_set_transform_local(avatar, rightLowerArm, avatarInitialLocalTransforms[rightLowerArm]);
+    model_node_id leftLowerLeg = model_node_find(avatar, "J_Bip_L_LowerLeg");
+    model_node_set_transform_local(avatar, leftLowerLeg, avatarInitialLocalTransforms[leftLowerLeg]);
+    model_node_id rightLowerLeg = model_node_find(avatar, "J_Bip_R_LowerLeg");
+    model_node_set_transform_local(avatar, rightLowerLeg, avatarInitialLocalTransforms[rightLowerLeg]);
+
     model_node_id hipsNode = model_node_find(avatar, "J_Bip_C_Hips");
     model_node_set_transform_model(avatar, hipsNode, pose_matrix({hipPos + vec3{0, 0.12, 0}, hipsRot_initial * hipsRot}, vec3_one * 1.15));
 
@@ -399,106 +429,160 @@ int main(int argc, char *argv[]) {
       matrix newTrans = matrix_trs(matrix_extract_translation(startTrans), matrix_extract_rotation(startTrans) * rotation, matrix_extract_scale(startTrans));
       model_node_set_transform_model(avatar, modelNode, newTrans);
     };
+
+    vec3 p1 = matrix_extract_translation(model_node_get_transform_model(avatar, model_node_find(avatar, "J_Bip_C_Spine")));
+    vec3 p2 = matrix_extract_translation(model_node_get_transform_model(avatar, model_node_find(avatar, "J_Bip_C_Hips")));
+    // line_add(p1, p2, {0,0,255,255}, {0,0,255,255}, 0.01f);
+    // line_add(p1, p1+upHips_t, {0,255,0,255}, {0,255,0,255}, 0.01f);
+    setNodeRelativeRotationFromTPose("J_Bip_C_Spine", quatBetweenVecs(
+      p1 - p2,
+      upHips_t
+    )); // Jank IK
+
+    vec3 noseTop_t = (poseWorldVecs(4) + poseWorldVecs(1)) / 2;
+    vec3 mouthCenter_t = (poseWorldVecs(10) + poseWorldVecs(9)) / 2;
+    vec3 upFace_t = noseTop_t - mouthCenter_t;
+    vec3 acrossFace_t = poseWorldVecs(7) - poseWorldVecs(8);
+    vec3 outFace_t = vec3_cross(acrossFace_t, upFace_t);
+    vec3 orthog_upFace = vec3_cross(outFace_t, acrossFace_t);
+    quat headQuatGlobal = quatFromNewBasis(acrossFace_t, orthog_upFace, outFace_t);
+
+    auto drawBasis = [&](vec3 origin, vec3 x, vec3 y, vec3 z) {
+      line_add(origin, origin + 0.1*vec3_normalize(x), {255,0,0,255}, {255,0,0,255}, 0.01f);
+      line_add(origin, origin + 0.1*vec3_normalize(y), {0,255,0,255}, {0,255,0,255}, 0.01f);
+      line_add(origin, origin + 0.1*vec3_normalize(z), {0,0,255,255}, {0,0,255,255}, 0.01f);
+    };
+    drawBasis(vec3{0,0,0}, vec3{1,0,0}, vec3{0,1,0}, vec3{0,0,1});
+
+    model_node_set_transform_model(avatar, head, matrix_trs(
+      matrix_extract_translation(model_node_get_transform_model(avatar, head)),
+      matrix_extract_rotation(avatarInitialModelTransforms[head]) * quat_from_angles(-35, 0, 0) * headQuatGlobal,
+      matrix_extract_scale(model_node_get_transform_model(avatar, head))
+    )); // more jank ik (put into t-pose rotation facing z-forward in world space, tilt up the head, then apply target rot in world space)
+
     setNodeRelativeRotationFromTPose("J_Bip_R_UpperArm", quatBetweenVecs(
       poseWorldVecs(12) - poseWorldVecs(11),
       poseWorldVecs(14) - poseWorldVecs(12)
     ));
-    setNodeRelativeRotationFromTPose("J_Bip_R_LowerArm", quatBetweenVecs(
-      poseWorldVecs(14) - poseWorldVecs(12),
-      poseWorldVecs(16) - poseWorldVecs(14)
+    // IK rest of the way, trying to match hand position
+    vec3 rightLowerArmPos = matrix_extract_translation(model_node_get_transform_model(avatar,rightLowerArm));
+    model_node_set_transform_model(avatar, rightLowerArm, matrix_trs(
+      rightLowerArmPos,
+      matrix_extract_rotation(avatarInitialModelTransforms[rightLowerArm]) * quatBetweenVecs(
+        vec3{-1,0,0},
+        poseWorldVecs(16) - rightLowerArmPos
+      ),
+      matrix_extract_scale(model_node_get_transform_model(avatar, rightLowerArm))
     ));
+    // line_add(rightLowerArmPos, poseWorldVecs(16), {255,0,0,255}, {255,0,0,255}, 0.01f);
+
     setNodeRelativeRotationFromTPose("J_Bip_L_UpperArm", quatBetweenVecs(
       poseWorldVecs(11) - poseWorldVecs(12),
       poseWorldVecs(13) - poseWorldVecs(11)
     ));
-    setNodeRelativeRotationFromTPose("J_Bip_L_LowerArm", quatBetweenVecs(
-      poseWorldVecs(13) - poseWorldVecs(11),
-      poseWorldVecs(15) - poseWorldVecs(13)
+    // IK rest of the way, trying to match hand position
+    vec3 leftLowerArmPos = matrix_extract_translation(model_node_get_transform_model(avatar, leftLowerArm));
+    model_node_set_transform_model(avatar, leftLowerArm, matrix_trs(
+      leftLowerArmPos,
+      matrix_extract_rotation(avatarInitialModelTransforms[leftLowerArm]) * quatBetweenVecs(
+        vec3{1,0,0},
+        poseWorldVecs(15) - leftLowerArmPos
+      ),
+      matrix_extract_scale(model_node_get_transform_model(avatar, leftLowerArm))
     ));
+    // line_add(leftLowerArmPos, poseWorldVecs(15), {255,0,0,255}, {255,0,0,255}, 0.01f);
+
     setNodeRelativeRotationFromTPose("J_Bip_R_UpperLeg", quatBetweenVecs(
       -upHips_t,
       poseWorldVecs(26) - poseWorldVecs(24)
     ));
-    setNodeRelativeRotationFromTPose("J_Bip_R_LowerLeg", quatBetweenVecs(
-      poseWorldVecs(26) - poseWorldVecs(24),
-      poseWorldVecs(28) - poseWorldVecs(26)
+    vec3 rightLowerLegPos = matrix_extract_translation(model_node_get_transform_model(avatar, rightLowerLeg));
+    model_node_set_transform_model(avatar, rightLowerLeg, matrix_trs(
+      rightLowerLegPos,
+      matrix_extract_rotation(avatarInitialModelTransforms[rightLowerLeg]) * quatBetweenVecs(
+        vec3{0,-1,0},
+        poseWorldVecs(28) - rightLowerLegPos
+      ),
+      matrix_extract_scale(model_node_get_transform_model(avatar, rightLowerLeg))
     ));
+    // setNodeRelativeRotationFromTPose("J_Bip_R_LowerLeg", quatBetweenVecs(
+    //   poseWorldVecs(26) - poseWorldVecs(24),
+    //   poseWorldVecs(28) - poseWorldVecs(26)
+    // ));
     setNodeRelativeRotationFromTPose("J_Bip_L_UpperLeg", quatBetweenVecs(
       -upHips_t,
       poseWorldVecs(25) - poseWorldVecs(23)
     ));
-    setNodeRelativeRotationFromTPose("J_Bip_L_LowerLeg", quatBetweenVecs(
-      poseWorldVecs(25) - poseWorldVecs(23),
-      poseWorldVecs(27) - poseWorldVecs(25)
+    vec3 leftLowerLegPos = matrix_extract_translation(model_node_get_transform_model(avatar, leftLowerLeg));
+    model_node_set_transform_model(avatar, leftLowerLeg, matrix_trs(
+      leftLowerLegPos,
+      matrix_extract_rotation(avatarInitialModelTransforms[leftLowerLeg]) * quatBetweenVecs(
+        vec3{0,-1,0},
+        poseWorldVecs(27) - leftLowerLegPos
+      ),
+      matrix_extract_scale(model_node_get_transform_model(avatar, leftLowerLeg))
     ));
-
-    // line_add(poseWorldVecs(12), testVec1+poseWorldVecs(12), {200,0,0,255}, {200,0,0,255}, 0.01f);
-    // line_add(poseWorldVecs(12), testVec2+poseWorldVecs(12), {10,255,0,255}, {10,255,0,255}, 0.02f);
-    // line_add(poseWorldVecs(12), testVec3+poseWorldVecs(12), {200,255,0,255}, {200,255,0,255}, 0.02f);
-
+    // setNodeRelativeRotationFromTPose("J_Bip_L_LowerLeg", quatBetweenVecs(
+    //   poseWorldVecs(25) - poseWorldVecs(23),
+    //   poseWorldVecs(27) - poseWorldVecs(25)
+    // ));
 
     model_draw(avatar,  pose_matrix({{0, 0, 0}, quat_identity}, vec3_one * 1.0));
     // render_add_mesh(cube_mesh, cube_mat, rShoulderGlobalTransform);
 
-    // if (frameNum == 1) {
-    //   model_node_id nodeId = 0;
-    //   std::cout << "\n\nTraversing";
-    //   std::cout << model_node_get_name(avatar, 0) << std::endl;
-    //   while (nodeId != -1) {
-    //     nodeId = model_node_iterate(avatar, nodeId);
-    //     if (nodeId != -1) {
-    //       std::cout << model_node_get_name(avatar, nodeId) << std::endl;
-    //       matrix localTransform = model_node_get_transform_local(avatar, nodeId);
-    //       // torch::Tensor localTransformTorch = torch::from_blob(localTransform.m, {4,4}, torch::kFloat);
-    //       // std::cout << localTransformTorch << std::endl;
-    //     }
+    {
+      static pose_t window_pose = //pose_t{ vec3{1,1,1} * 0.9f, quat_lookat({1,1,1}, {0,0,0}) };
+      pose_t{ {0,0,-0.25f}, quat_lookat({0,0,-0.25f}, {0,0,0}) };
+      ui_window_begin("Aux Kpt Filter Smoothing", window_pose, vec2{ 24 }*cm2m);
+      
+      static float min_cutoff = 0.008;
+      static float beta = 0.01;//0.0225;
+      static float d_cutoff = 1.0;
+      ui_hslider("min_cutoff", min_cutoff, 0.00f, 0.1f, 0, 140 * mm2m); 
+      ui_sameline();
+      char *min_cutoff_str = (char *)alloca(32);
+      sprintf(min_cutoff_str, "min_cutoff: %.4f", min_cutoff);
+      ui_text(min_cutoff_str);
+
+      ui_nextline();
+      ui_hslider("beta", beta, 0.00f, 0.2f, 0, 140 * mm2m); 
+      ui_sameline();
+      char *beta_str = (char *)alloca(32);
+      sprintf(beta_str, "beta: %.4f", beta);
+      ui_text(beta_str);
+
+      ui_nextline();
+      ui_hslider("d_cutoff", d_cutoff, 0.01f, 2.0f, 0, 140 * mm2m); 
+      ui_sameline();
+      char *d_cutoff_str = (char *)alloca(32);
+      sprintf(d_cutoff_str, "d_cutoff: %.4f", d_cutoff);
+      ui_text(d_cutoff_str);
+      // poseModel->aux_keypoints_filter.ChangeParams(min_cutoff, beta, d_cutoff);
+      poseModel->main_keypoints_filter.ChangeParams(min_cutoff, beta, d_cutoff);
+      poseModel->main_keypoints_filter_2.ChangeParams(min_cutoff, beta, d_cutoff);
+      ui_window_end();
+    }
+    // ui_model(gltf, vec2{ 40,10 }*mm2m, scale*0.1f);
+
+    // static bool pressed = false;
+    // if (ui_button("Spawn")) {
+    //   if (!pressed) {
+    //     pressed = true;
+    //     solid_t new_obj = solid_create({ 0,1,0 }, quat_identity);
+    //     solid_add_sphere(new_obj, 1.8f * scale, 40);
+    //     solid_add_box(new_obj, vec3_one * 1.4f * scale, 40);
+    //     phys_objs.push_back({ new_obj, scale });
     //   }
+    // } else {
+    //   pressed = false;
+    // }
+    // ui_sameline();
+    // if (ui_button("Clear")) {
+    //   for (size_t i = 0; i < phys_objs.size(); i++)
+    //     solid_release(phys_objs[i].solid);
+    //   phys_objs.clear();
     // }
 
-
-
-    // render_add_mesh(desktop_mesh, desktop_material, pose_matrix({2,+0.8,-2.5f}, vec3_one * 1));
-    // render_add_mesh(desktop_mesh, desktop_material, pose_matrix({4,+0.4,-2.5f}, vec3_one * 1));
-    // render_add_mesh(desktop_mesh, desktop_material, pose_matrix({0,+0.8,-2.5f}, vec3_one * 1));
-    // render_add_mesh(desktop_mesh, desktop_material, pose_matrix({6,+0f.6,-2.5f}, vec3_one * 1));
-
-    */
-
-    static pose_t window_pose = //pose_t{ vec3{1,1,1} * 0.9f, quat_lookat({1,1,1}, {0,0,0}) };
-		pose_t{ {0,0,-0.25f}, quat_lookat({0,0,-0.25f}, {0,0,0}) };
-    ui_window_begin("Options", window_pose, vec2{ 24 }*cm2m);
-    
-    static float scale = 0.25f;
-    ui_hslider("scale", scale, 0.05f, 0.25f, 0, 72 * mm2m); ui_sameline();
-    ui_model(gltf, vec2{ 40,10 }*mm2m, scale*0.1f);
-
-    static bool pressed = false;
-    if (ui_button("Spawn")) {
-      if (!pressed) {
-        pressed = true;
-        solid_t new_obj = solid_create({ 0,1,0 }, quat_identity);
-        solid_add_sphere(new_obj, 1.8f * scale, 40);
-        solid_add_box(new_obj, vec3_one * 1.4f * scale, 40);
-        phys_objs.push_back({ new_obj, scale });
-      }
-    } else {
-      pressed = false;
-    }
-    ui_sameline();
-    if (ui_button("Clear")) {
-      for (size_t i = 0; i < phys_objs.size(); i++)
-        solid_release(phys_objs[i].solid);
-      phys_objs.clear();
-    }
-
-    ui_window_end();
-
-    // Render solid helmets
-    for (size_t i = 0; i < phys_objs.size(); i++) {
-      solid_get_pose  (phys_objs[i].solid, tr);
-      model_draw(gltf, pose_matrix(tr, vec3_one * phys_objs[i].scale));
-    }
-    // LOGD("Loop ran");
   };
   auto update_ptr = []() { update(); };
 

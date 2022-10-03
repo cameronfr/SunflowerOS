@@ -34,6 +34,18 @@ class OneEuroFilter {
       initialized = true;
     }
 
+    void ChangeParams(float min_cutoff, float beta, float d_cutoff) {
+      this->min_cutoff = torch::ones_like(x_prev) * min_cutoff;
+      this->beta = torch::ones_like(x_prev) * beta;
+      this->d_cutoff = torch::ones_like(x_prev) * d_cutoff;
+    }
+
+    void ResetHistory() {
+      this->x_prev = torch::zeros_like(x_prev);
+      this->dx_prev = torch::zeros_like(dx_prev);
+      this->t_prev = 0;
+    }
+
     torch::Tensor filter(long long t, torch::Tensor x) {
       if (x.sizes() != this->x_prev.sizes()) {
         throw std::invalid_argument("x must have the same shape as x_prev");
