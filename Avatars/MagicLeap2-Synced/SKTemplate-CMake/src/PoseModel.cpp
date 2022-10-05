@@ -302,16 +302,6 @@ public:
       long long time_us = stm_us(stm_now());
 
       torch::Tensor landmarkOutputFiltered = landmarkOutputRaw;
-      // torch::Tensor landmarkOutputFiltered = torch::zeros_like(landmarkOutputRaw);
-      // landmarkOutputFiltered.index_put_({Slice(0, 33), Slice()}, 
-      //   main_keypoints_filter.filter(time_us, landmarkOutputRaw.index({Slice(0, 33), Slice()}))
-      // );
-      // landmarkOutputFiltered.index_put_({Slice(33, 35), Slice()}, 
-      //   // aux_keypoints_filter.filter(time_us, landmarkOutputRaw.index({Slice(33, 35), Slice()}))
-      //   landmarkOutputRaw.index({Slice(33, 35), Slice()})
-      // );
-      //note that we are filtering on scale of ROI'd 256x256 image, so scale should remain consistent with distance of person from camera
-      // std::cout << "landmarkOutputFiltered: " << landmarkOutputFiltered << std::endl;
 
       // landmarkOutputMain is 33 keypoints, (y,x) 
       torch::Tensor landmarkOutputYX = torch::flip(landmarkOutputFiltered.index({Slice(), Slice(0, 2)}), {-1});
@@ -323,24 +313,18 @@ public:
       int boxStartOffsetArr[] = {mind0, mind1};
       torch::Tensor boxStartOffset = torch::from_blob(boxStartOffsetArr, {2}, torch::kInt32).clone();
       landmarkOutputYX = boxResizeOutCoordMap(landmarkOutputYX, false) + boxStartOffset;
-      landmarkOutputZ = boxResizeOutCoordMap(landmarkOutputZ, true); //try and keep Z in same scale as YX, even though it's not really a coordinate
+      // landmarkOutputZ = boxResizeOutCoordMap(landmarkOutputZ, true); //try and keep Z in same scale as YX, even though it's not really a coordinate
+      landmarkOutputZ = (rawImage.size(0) / 256.0f) * landmarkOutputZ; // this seems more accurate as z-scale
 
-      // TODO: scale of keypoints changes here. Normalize before put in. If filter aux keypoints before the boxResizeOutCoordMap, get weird bouncy feedback.
+      // TODO: scale of keypoints changes here. Normalize by box size or smthn before put in? If filter aux keypoints before the boxResizeOutCoordMap, get weird bouncy feedback.
       landmarkOutputYX.index_put_({Slice(33, 35), Slice()}, 
         aux_keypoints_filter.filter(time_us, landmarkOutputYX.index({Slice(33, 35), Slice()}))
-      );
-      landmarkOutputYX.index_put_({Slice(0, 33), Slice()}, 
-        main_keypoints_filter.filter(time_us, landmarkOutputYX.index({Slice(0, 33), Slice()}))
-      );
-      landmarkOutputZ.index_put_({Slice(0, 33), Slice()}, 
-        main_keypoints_filter_2.filter(time_us, landmarkOutputZ.index({Slice(0, 33), Slice()}))
       );
 
       // for (int i = 34; i < landmarkOutputYX.size(0); i++) {
       //   addRedDot(rawImage, landmarkOutputYX[i][0].item<int>(),  landmarkOutputYX[i][1].item<int>());
       // }
       // debugShowImg(rawImage, debugTex);
-
 
       torch::Tensor visibilityProbs = 1 / (1 + torch::exp(-landmarkOutputRaw.index({Slice(), 3})));
       float maxVisibilityProb = (visibilityProbs).max().item<float>();
@@ -361,10 +345,6 @@ public:
         int roi_mind1 = centerKpt[1].item<int>() - radius;
         int roi_maxd1 = centerKpt[1].item<int>() + radius;
 
-        // roi_mind0 = std::max(0, roi_mind0);
-        // roi_maxd0 = std::min((int)rawImage.size(0), roi_maxd0);
-        // roi_mind1 = std::max(0, roi_mind1);
-        // roi_maxd1 = std::min((int)rawImage.size(1), roi_maxd1);
         torch::Tensor roiBoundsLandmarks = torch::from_blob((int[]){roi_mind0, roi_maxd0, roi_mind1, roi_maxd1}, {4}, torch::kInt32).clone();
 
         lastLandmarkROI = roiBoundsLandmarks;

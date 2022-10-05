@@ -1,3 +1,5 @@
+#pragma once
+
 #include <torch/script.h>
 #include "debug.h"
 
