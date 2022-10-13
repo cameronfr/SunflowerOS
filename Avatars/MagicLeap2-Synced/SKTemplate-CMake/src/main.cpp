@@ -414,8 +414,8 @@ int main(int argc, char *argv[]) {
   pose_t cube_pose;
 
   // avatar = model_create_file("../../../vroiddemo.glb");
-  // avatar = model_create_file("../../../vroiddemo_manualoptim_1.glb");
-  avatar = model_create_file("../../../vroid_manualoptim_1_throughblender.glb");
+  // avatar = model_create_file("../../../vroid_manualoptim_1_throughblender.glb");
+  avatar = model_create_file("../../../vroiddemo_throughblender.glb");
   // avatar = model_create_file("DamagedHelmet.gltf");
   // avatar = model_create_file("Cosmonaut.glb");
   std::unordered_map<model_node_id, matrix> avatarInitialLocalTransforms;
@@ -530,6 +530,11 @@ int main(int argc, char *argv[]) {
         poseWorld = torch::mm(poseRelativeToCamera, physicalCameraToWorldSpace.index({Slice(0,3), Slice(0,3)})) + physicalCameraToWorldSpace.index({3, Slice(0, 3)}); // does same thing as if we made the poseOnCameraPlane points nx4 (by appending one) and multiplied by the 4x4 matrix
 
         poseWorld = poseWorldFilter.filter(stm_us(stm_now()), poseWorld);
+        // If any values are nan (usu from depth estimation code) reset filter
+        if (poseWorld.isnan().any().item<bool>()) {
+          LOGD("Resetting poseWorldFilter because of nan");
+          poseWorldFilter.ResetHistory();
+        }
       } else {
         poseWorldFilter.ResetHistory();
       }

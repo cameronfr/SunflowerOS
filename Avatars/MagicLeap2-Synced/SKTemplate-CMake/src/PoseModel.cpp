@@ -62,7 +62,6 @@ public:
     pose_detector_tflite("/data/data/com.termux/files/home/MagicLeap2-Synced/models/pose_detection.tflite"),
     pose_landmarks_tflite("/data/data/com.termux/files/home/MagicLeap2-Synced/models/pose_landmark_lite.tflite") {
       main_keypoints_filter.Initialize(0, torch::zeros({33, 2}), torch::zeros({33, 2}), 0.005, 0.03875, 1.0);
-      main_keypoints_filter_2.Initialize(0, torch::zeros({33, 1}), torch::zeros({33, 1}), 0.005, 0.03875, 1.0);
       aux_keypoints_filter.Initialize(0, torch::zeros({2, 2}), torch::zeros({2, 2}), 0.008, 0.01, 1.0);
       pose_detection_anchors = GenerateAnchors();
       LOGD("Person Detec Anchors Count : %d\n", pose_detection_anchors.size(0));
@@ -184,7 +183,7 @@ public:
 
     // // Get top 1 detections as a mask, filter those that are lower than 0.5 confidence. If want actual top 4, need to do overlap based filtering.
     std::tuple topk = torch::topk(outputProbabilities, 1, 0, true, true); //Tuple with (values, indices)
-    torch::Tensor candidateMask = std::get<1>(topk).index({std::get<0>(topk) > 0.7f});
+    torch::Tensor candidateMask = std::get<1>(topk).index({std::get<0>(topk) > 0.5f});
     torch::Tensor candidateKeypoints = outputKeypoints.index({candidateMask, Slice()});
 
     // Single detection (or 0 detection). x_center,y_center, w, h, x1, y1, x2, y2, x3, y3, x4, y4.
@@ -233,7 +232,7 @@ public:
       roiBounds = lastLandmarkROI;
       haveROI = true;
     } else {
-      // std::cout << "Using detector to find ROI" << std::endl;
+      // LOGD("Using detector to find ROI");
       auto detectorResult = PersonDetectorROI(rawImage, debugTex);
       torch::Tensor detectorPersonBounds = std::get<0>(detectorResult);
       bool detectorFoundPerson = std::get<1>(detectorResult);
@@ -327,14 +326,17 @@ public:
       // debugShowImg(rawImage, debugTex);
 
       torch::Tensor visibilityProbs = 1 / (1 + torch::exp(-landmarkOutputRaw.index({Slice(), 3})));
-      float maxVisibilityProb = (visibilityProbs).max().item<float>();
-      // std::cout << "avgVisibilityProb: " << avgVisibilityProb << std::endl;
+
+      // float maxVisibilityProb = (visibilityProbs).mean().item<float>();
+      // get median visibility prob using torch sorting
+      torch::Tensor visibilityProbsSorted = std::get<0>(visibilityProbs.sort(0));
+      float maxVisibilityProb = visibilityProbsSorted[visibilityProbsSorted.size(0) / 2].item<float>();
 
       latestPose = torch::concat({torch::flip(landmarkOutputYX, {-1}), landmarkOutputZ}, 1); // 33x [x_img, y_img, z_img_ish]
       latestPoseVisibilities = visibilityProbs; 
 
       // Save ROI for next frame, if the track is good
-      if (maxVisibilityProb > 0.8) {
+      if (maxVisibilityProb > 0.5) {
         // Works well to use mediapipe method w/ mind0 etc allowed to be negative. s.t. center aux keypoint is always at center of imag fed to mediapipe.
         // get two aux keypoints 
         torch::Tensor centerKpt = landmarkOutputYX.index({33});
@@ -349,16 +351,16 @@ public:
 
         lastLandmarkROI = roiBoundsLandmarks;
         useLastLandmarkROI = true;
-        // useLastLandmarkROI = false;
+        return true;
       } else {
         LOGD("maxVisibilityProb too low, not using this as ROI, val is %f", maxVisibilityProb);
         // Reset ROI-box filter and keypoints filters.
         aux_keypoints_filter.ResetHistory();
         main_keypoints_filter.ResetHistory();
-        main_keypoints_filter_2.ResetHistory();
         useLastLandmarkROI = false;
+        return false; //return false to make sure 
       }
-      return true;
+      // return true;
     } else {
       // std::cout << "DON'T HAVE AN ROI" << std::endl;
       return false;
@@ -366,7 +368,6 @@ public:
   }
 public:
   OneEuroFilter main_keypoints_filter;
-  OneEuroFilter main_keypoints_filter_2;
   OneEuroFilter aux_keypoints_filter;
 private: 
   // Anchors for mediapipe pose_detection (not pose landmarks)
