@@ -1,0 +1,129 @@
+diff -r cppyy-backend/cling/python/cppyy_backend/loader.py cppyy-backend-modified-tmp/cling/python/cppyy_backend/loader.py
+36c36
+<         return ctypes.CDLL(bkname, ctypes.RTLD_GLOBAL)
+---
+>         return ctypes.CDLL(bkname, ctypes.RTLD_GLOBAL), None
+
+diff -r cppyy-backend/cling/src/cmake/modules/CheckCompiler.cmake cppyy-backend-modified-tmp/cling/src/cmake/modules/CheckCompiler.cmake
+205a206,207
+> elseif(CMAKE_SYSTEM_NAME MATCHES Android)
+>   include(SetUpLinux)
+diff -r cppyy-backend/cling/src/core/clib/src/mmapsup.c cppyy-backend-modified-tmp/cling/src/core/clib/src/mmapsup.c
+45c45
+< #if defined(R__LINUX) && !defined(R__GLIBC) && !defined(__CYGWIN__) \
+---
+> #if !defined(__ANDROID__) && defined(R__LINUX) && !defined(R__GLIBC) && !defined(__CYGWIN__) \
+diff -r cppyy-backend/cling/src/core/clib/src/mvalloc.c cppyy-backend-modified-tmp/cling/src/core/clib/src/mvalloc.c
+32c32
+< #if defined(R__LINUX) && !defined(R__GLIBC) && !defined(__CYGWIN__) \
+---
+> #if !defined(__ANDROID__) && defined(R__LINUX) && !defined(R__GLIBC) && !defined(__CYGWIN__) \
+
+diff -r cppyy-backend/cling/src/core/metacling/src/TCling.cxx cppyy-backend-modified-tmp/cling/src/core/metacling/src/TCling.cxx
+19a20,21
+> #include <stdio.h>
+> 
+159a162
+> #include <link.h>
+1108a1112
+>   dlerror();
+1109a1114
+>   //printf("Is from rootcling? %d, dlerror is %s", foundSymbol, dlerror());
+3345,3374c3350,3388
+<    struct PointerNo4 {
+<       void* fSkip[3];
+<       void* fPtr;
+<    };
+<    struct LinkMap {
+<       void* fAddr;
+<       const char* fName;
+<       void* fLd;
+<       LinkMap* fNext;
+<       LinkMap* fPrev;
+<    };
+<    if (!fPrevLoadedDynLibInfo || fPrevLoadedDynLibInfo == (void*)(size_t)-1) {
+<       PointerNo4* procLinkMap = (PointerNo4*)dlopen(0,  RTLD_LAZY | RTLD_GLOBAL);
+<       // 4th pointer of 4th pointer is the linkmap.
+<       // See http://syprog.blogspot.fr/2011/12/listing-loaded-shared-objects-in-linux.html
+<       LinkMap* linkMap = (LinkMap*) ((PointerNo4*)procLinkMap->fPtr)->fPtr;
+<       if (!fSharedLibs.Contains(linkMap->fName))
+<          RegisterLoadedSharedLibrary(linkMap->fName);
+<       fPrevLoadedDynLibInfo = linkMap;
+<       // reduce use count of link map structure:
+<       dlclose(procLinkMap);
+<    }
+< 
+<    LinkMap* iDyLib = (LinkMap*)fPrevLoadedDynLibInfo;
+<    while (iDyLib->fNext) {
+<       iDyLib = iDyLib->fNext;
+<       if (!fSharedLibs.Contains(iDyLib->fName))
+<          RegisterLoadedSharedLibrary(iDyLib->fName);
+<    }
+<    fPrevLoadedDynLibInfo = iDyLib;
+---
+>   auto callback = [](struct dl_phdr_info *info, size_t size, void *data) {
+>     auto self = (TCling*)data;
+>     if (info->dlpi_name && info->dlpi_name[0]) {
+>       if (!self->fSharedLibs.Contains(info->dlpi_name))
+>         self->RegisterLoadedSharedLibrary(info->dlpi_name);
+>     }
+>     return 0;
+>   };
+>   dl_iterate_phdr(callback, this);
+diff -r cppyy-backend/cling/src/core/thread/src/TPosixThread.cxx cppyy-backend-modified-tmp/cling/src/core/thread/src/TPosixThread.cxx
+26a27,45
+> // Android compat. Will prob break things since kills threads w/o any of this cancel signalling stuff.
+> #ifdef __ANDROID__
+> int pthread_cancel(pthread_t h) {
+>         return pthread_kill(h, 0);
+> }
+> int pthread_setcanceltype(int state, int oldstate) {
+> 	return 0;
+> }
+> int pthread_setcancelstate(int state, int *oldstate) {
+> 	return 0;
+> }
+> #define PTHREAD_CANCEL_DISABLE 0
+> #define PTHREAD_CANCEL_ENABLE 0
+> #define PTHREAD_CANCEL_ASYNCHRONOUS 0
+> #define PTHREAD_CANCEL_DEFERRED 0
+> #define PTHREAD_CANCEL_ENABLE 0
+> void pthread_testcancel(void) {}
+> #endif /* __ANDROID__ */
+> 
+diff -r cppyy-backend/cling/src/core/unix/src/TUnixSystem.cxx cppyy-backend-modified-tmp/cling/src/core/unix/src/TUnixSystem.cxx
+212c212
+< #if (defined(R__LINUX) && !defined(R__WINGCC))
+---
+> #if (defined(R__LINUX) && !defined(R__WINGCC) && !defined(__ANDROID__))
+diff -r cppyy-backend/cling/src/interpreter/cling/lib/Interpreter/CIFactory.cpp cppyy-backend-modified-tmp/cling/src/interpreter/cling/lib/Interpreter/CIFactory.cpp
+400a401,407
+> 
+>   #ifdef __TERMUX__
+>       sArguments.addArgument("-isystem", __TERMUX_PREFIX__"/include");
+>       sArguments.addArgument("-isystem", __TERMUX_PREFIX__"include/x86_64-linux-android");
+>   #endif
+> 
+> 
+
+diff -r cppyy-backend/cling/src/main/CMakeLists.txt cppyy-backend-modified-tmp/cling/src/main/CMakeLists.txt
+25a26
+> set_property(TARGET rootcling PROPERTY ENABLE_EXPORTS 1)
+43,44c44,45
+<                      COMMAND ln -f rootcling rootcint
+<                      COMMAND ln -f rootcling genreflex
+---
+>                      COMMAND ln -fs rootcling rootcint
+>                      COMMAND ln -fs rootcling genreflex
+
+
+diff get_device_api_level_inlines.txt /data/data/com.termux/files/usr/include/bits/get_device_api_level_inlines.h
+34c39,40
+< int atoi(const char* __s) __attribute_pure__;
+---
+> //int atoi(const char* __s) __attribute_pure__;
+>
+38c44
+<   int api_level = atoi(value);
+---
+>   int api_level = 29;//atoi(value);

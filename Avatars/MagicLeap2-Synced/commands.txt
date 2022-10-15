@@ -1,0 +1,161 @@
+adb connect 192.168.0.26:5555
+adb shell am start -n com.termux/.HomeActivity
+ssh -i ~/.ssh/google_compute_engine -L 8891:localhost:8888 -p 8022 192.168.0.26
+adb shell pm grant com.termux com.magicleap.permission.HEAD_POSE
+
+z SunflowerOS/Repo/Avatars
+watch -n4 "rsync -a  MagicLeap2-Synced -e 'ssh -p 8022' 192.168.0.26:~/mac-sync"
+
+clang++ -std=c++17 -I mlsdk/include -L mlsdk/lib/ml2 -lEGL -lGLESv3 -lgraphics.magicleap -lperception.magicleap OpenGLCube.cpp
+
+// Fresh Termux Setup
+// Start with adb shell am start -n com.termux/.HomeActivity so that UI shows up 
+pkg install openssh
+passwd
+echo "sshd" > ~/.profile
+sshd
+ssh <termux_ip> // On External
+sh-copy-id -i ~/.ssh/google_compute_engine.pub -p 8022 192.168.0.26 // On External
+pkg install python clang libxml2 libxslt libzmq vim tmux rsync wget git cmake binutils patchelf
+// StereoKit deps
+pkg install jsoncpp-static build-essential fontconfig gdb
+pip install jupyter Cython
+// KHR Include
+cd /data/data/com.termux/files/usr/include/
+mkdir KHR && cd KHR
+wget https://registry.khronos.org/EGL/api/KHR/khrplatform.h
+
+//  More
+adb install adb-join-wifi.apk
+
+
+// Mediapipe
+pkg install opencv-python ffmpeg
+
+
+// All perms Termux Mod
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="com.magicleap.permission.EYE_TRACKING" />
+    <uses-permission android:name="com.magicleap.permission.PUPIL_SIZE" />
+    <uses-permission android:name="com.magicleap.permission.CONTROLLER_POSE" />
+    <uses-permission android:name="com.magicleap.permission.HEAD_POSE" />
+    <uses-permission android:name="com.magicleap.permission.SPATIAL_ANCHOR" />
+    <uses-permission android:name="com.magicleap.permission.HAND_TRACKING" />
+    <uses-permission android:name="com.magicleap.permission.WEBVIEW" />
+    <uses-permission android:name="com.magicleap.permission.MARKER_TRACKING" />
+    <uses-permission android:name="com.magicleap.permission.VOICE_INPUT" />
+    <uses-permission android:name="com.magicleap.permission.SPATIAL_MAPPING" />
+// If don't add these to manifest, might get segmentation fault. Also, make sure to ask approval (prob will also cause seg fault)
+// Also Require this as child as activity and application tags, or will get Timeout error on MLGraphicsBeginFrame
+        <meta-data android:name="com.magicleap.augmented_reality_only" android:value="true" />
+// Some perms must be requested
+e.g. adb shell pm grant com.termux android.permission.CAMERA
+
+
+// Also need openxr provider thing in Manifest
+
+// Build xmake with (actually easier to just use cmake for stereokit)
+make CFLAG="-fPIE -pie" CFLAGS="-fPIE -pie" LDFLAG="-fPIE -pie" LDFLAGS="-fPIE -pie"
+
+
+// Building tf-lite on device -- follow instructions 
+// Building pytorch on device
+- follow instructions for building pytorch w/ setup.py thingy.
+- pkg install ccache
+- turn off INTERN_MOBILE_BUILD in CMakeLists.txt (in ANDROID if statement)
+- remove ANDROID from if statements in third_party/onnx/CMakeLists.txt
+- CMAKE_SYSTEM_NAME=Linux USE_VULKAN=0 USE_OPENCV=1 USE_FFMPEG=1 python3 setup.py install --cmake-only
+=> problem with libsleef
+
+// Benchmarking
+// Mediapipe pose
+pose_detection takes ~90ms w/ maven tflite
+pose_landmarks takes ~60ms w/ maven tflite
+pose_landmarks takes ~15ms w/ maven tflite_gpu, but it causes flashing of the other gpu stuff
+pose_landmarks takes ~10ms w/ maven tflite_gpu, following options, no flickering.
+  gpu_options.inference_preference = TFLITE_GPU_INFERENCE_PREFERENCE_SUSTAINED_SPEED;
+  gpu_options.inference_priority1 = TFLITE_GPU_INFERENCE_PRIORITY_MIN_LATENCY;
+  gpu_options.inference_priority2 = TFLITE_GPU_INFERENCE_PRIORITY_MIN_MEMORY_USAGE;
+  gpu_options.inference_priority3 = TFLITE_GPU_INFERENCE_PRIORITY_MAX_PRECISION;
+
+
+// Building mediapipe for android as shared lib
+// Download mediapipe
+// Add following to WORKSPACE in repo
+android_sdk_repository(
+    name = "androidsdk", # Required. Name *must* be "androidsdk".
+    path = "/Users/cameronfranz/Library/Android/sdk", # Optional. Can be omitted if `ANDROID_HOME` environment variable is set.
+)
+android_ndk_repository(
+    name = "androidndk", # Required. Name *must* be "androidndk".
+    path = "/Users/cameronfranz/Library/Android/sdk/ndk/21.1.6352462", # Optional. Can be omitted if `ANDROID_NDK_HOME` environment variable is set.
+    api_level=21,
+// add these files. only the BUILD is important really
+https://github.com/asprecic/mediapipe/tree/5a8529def5e82207c3051702bb5d800636abf61f/mediapipe/examples/desktop/libexample
+// Add "//third_party:opencv" so that opencv_java_3.so is created
+// Bazel build it on mac, and transfer binary
+bazel build --config=android --cpu=x86_64 //mediapipe/examples/desktop/libexample:libexample.so
+
+
+// Misc commands
+make -j8 && gdb ./SKNativeTemplate -ex "set print thread-events off" -ex run
+cd ~/MagicLeap2-Synced/StereoKit && make -j8 && cd ~/MagicLeap2-Synced/SKTemplate-CMake/ && make -j8 && gdb ./SKNativeTemplate -ex "set print thread-events off" -ex run
+
+
+
+// Launching process w/ dalvik fork & standard android access
+
+  cd ~/MagicLeap2-Synced/feature_testing && make -j8 && ../LaunchOnMainAndroidProcess/launchOnMainAndroidProcess "`pwd`/libFeatureTestLib.so"
+
+  cd ~/MagicLeap2-Synced/StereoKit && make -j8 && cd ~/MagicLeap2-Synced/SKTemplate-CMake/ && make -j8 && ../LaunchOnMainAndroidProcess/launchOnMainAndroidProcess "`pwd`/libSunflowerOSLib.so" && kill `pgrep sandbox_runner` && sleep 1 && gdb process -p `pgrep sandbox_runner`
+
+  cd ~/MagicLeap2-Synced/feature_testing_2 && make -j8 && ../LaunchOnMainAndroidProcess/launchOnMainAndroidProcess "`pwd`/libFeatureTestLib.so"
+
+// then, to stop process, find it and kill it
+  kill -9 `pgrep sandbox_runner`
+// Note that right now the flags in AndroidManifest and the lifecycle in SandboxRunner.java are s.t. the process always restarts with the first intent. Android is extremely annoying w/ trying to manage activity stuff, should just let us kill the process, smh
+
+
+// cppyy install on termux
+git clone https://github.com/wlav/cppyy-backend/tree/master
+// comment out atoi in vim /data/data/com.termux/files/usr/include/bits/ get_device_api_level_inlines.h and replace the atoi(...) call with "29" manually. Since IDK how to fix the conflicting-defines thing. (it's in the patch too)
+// Run source downloader, python3 create_src_directory.py
+// Apply patches in cppyy-backend-diff.patch (probably best to do it manually, patch prob not perfect)
+// cd cling, pip install . --no-build-isolation --verbose
+// cd clingwrapper, pip install . --no-build-isolation --verbose
+
+// Todo: should not build llvm w/ root, https://root-forum.cern.ch/t/why-does-compiling-root-causes-compiling-llvm-on-default/29320
+// Have to change loading because of https://issuetracker.google.com/issues/109986352 (RTLD_GLOBAL just broken)
+https://groups.google.com/g/android-ndk/c/0WVNu6JSit4/m/e5VQIdF9CQAJ
+cd /data/data/com.termux/files/usr/lib/python3.10/site-packages/cppyy_backend/lib 
+ patchelf --add-needed libCoreLegacy.so libCling.so
+ patchelf --add-needed libRIOLegacy.so libCling.so
+ patchelf --add-needed libThreadLegacy.so libCling.so
+ patchelf --add-needed libCling.so libcppyy_backend.so
+ cd /data/data/com.termux/files/usr/lib/python3.10/site-packages/
+ patchelf --add-needed libcppyy_backend.so libcppyy.cpython-310.so
+
+ LD_LIBRARY_PATH=`pwd` python3 ... import cppyy
+
+
+
+// cling install
+wget https://raw.githubusercontent.com/root-project/cling/master/tools/packaging/cpt.py
+do ./cpt.py stuff first (have to fix it up a bit, then python3 cpt.py --current-dev=tar)
+====================================
+diff --git a/cpt.py b/cpt_modified.py
+index b5105e1..4ebcf46 100644
+--- a/cpt.py
++++ b/cpt_modified.py
+@@ -1987,7 +1987,7 @@ elif OS == 'Linux':
+     EXEEXT = ''
+     SHLIBEXT = '.so'
+
+-    TMP_PREFIX = os.path.join(os.sep, 'tmp', 'cling-obj' + os.sep)
++    TMP_PREFIX = os.path.join(os.sep, '/data/data/com.termux/files/usr/tmp', 'cling-obj' + os.sep)
+
+ elif OS == 'Darwin':
+     DIST = 'MacOSX'
+====================================
+./cling -isystem /data/data/com.termux/files/usr/include -isystem /data/data/com.termux/files/usr/include/x86_64-linux-android

@@ -38,9 +38,9 @@ list(APPEND SI_LINK_LIBS
 )
 
 # Add source files to our target executable
-add_executable( SunflowerOS
-  src/main.cpp
-)
+# add_executable( SunflowerOS
+#   src/main.cpp
+# )
 add_library( SunflowerOSLib SHARED
   src/main.cpp
 )
@@ -48,11 +48,11 @@ add_library(PoseModel SHARED
   src/PoseModel.cpp
 )
 target_precompile_headers(SunflowerOSLib PRIVATE ../libraries/pytorch_headers/torch/script.h) # Crucial, otherwise takes forever to compile
-target_precompile_headers(SunflowerOS PRIVATE ../libraries/pytorch_headers/torch/script.h) # Crucial, otherwise takes forever to compile
+# target_precompile_headers(SunflowerOS PRIVATE ../libraries/pytorch_headers/torch/script.h) # Crucial, otherwise takes forever to compile
 target_precompile_headers(PoseModel PRIVATE ../libraries/pytorch_headers/torch/script.h) # Crucial, otherwise takes forever to compile
 
 
-target_link_libraries(SunflowerOS ${SI_LINK_LIBS})
+# target_link_libraries(SunflowerOS ${SI_LINK_LIBS})
 target_link_libraries(SunflowerOSLib ${SI_LINK_LIBS})
 
 target_link_libraries(PoseModel PRIVATE
