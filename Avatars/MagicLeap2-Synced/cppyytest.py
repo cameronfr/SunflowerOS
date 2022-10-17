@@ -1,7 +1,9 @@
+import sys
 import cppyy
 import os
 print("Cppyy version:", cppyy.__version__)
 cppyy.cppexec("""printf("C++ version %ld", __cplusplus);""")
+
 
 cppyy.gbl.gInterpreter.GetIncludePath()
 
@@ -25,6 +27,17 @@ for (int i = 0; i < 10; i++) {
   // print mean
   std::cout << tensor.mean().item<float>() << std::endl;
 }
+""")
+
+cppyy.cppexec("""
+#include <stdio.h>
+int* p = 0;
+printf("p = %p", p);
+""")
+
+# Throw std exception
+cppyy.cppexec("""
+throw std::runtime_error("test");
 """)
 
 # 1. Initialize StereoKit, get OpenXR running. Load Stereokit as shared lib, compiled with Cmake. Should also see if can redefine function in SK on the fly, w/ change handler (e.g. if change asset loading code, should reload all assets)? No idea what it's going to look like.

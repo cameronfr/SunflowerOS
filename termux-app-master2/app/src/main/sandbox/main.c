@@ -29,8 +29,22 @@ jint JNI_OnLoad(JavaVM *vmIn, void *reserved) {
 
 JNIEXPORT void JNICALL
 Java_com_termux_SandboxRunner_loadNativeCode(JNIEnv *env, jobject thiz, jstring path, jstring funcname) {
- char *libname = (char *) (*env)->GetStringUTFChars(env, path, NULL);
-  void *handle = dlopen(libname, RTLD_LAZY);
+  // split path string into libpath and libargs with space
+  LOGE("Using strtok");
+  char *pathStr = (char *) (*env)->GetStringUTFChars(env, path, NULL);
+  char *libPath = strtok(pathStr, " ");
+  char *libArgs = strtok(NULL, "");
+  // create fake argc and argv by splitting libargs with space
+  int argc = 0;
+  char *argv[100];
+  argv[argc++] = libPath;
+  char *arg = strtok(libArgs, " ");
+  while (arg != NULL) {
+    argv[argc++] = arg;
+    arg = strtok(NULL, " ");
+  }
+
+  void *handle = dlopen(libPath, RTLD_LAZY);
     if (handle) {
       // Call JNI_OnLoad
       void (*JNI_OnLoad)(JavaVM *, void *) = (void (*)(JavaVM *, void *)) dlsym(handle, "JNI_OnLoad");
@@ -51,7 +65,8 @@ Java_com_termux_SandboxRunner_loadNativeCode(JNIEnv *env, jobject thiz, jstring 
 
       void (*mainFunc)(int, char**) = dlsym(handle, "main");
       if (mainFunc) {
-        mainFunc(0, NULL);
+        // mainFunc(0, NULL);
+        mainFunc(argc, argv);
       } else {
         LOGI("SandboxRunner dlserver main not found");
       }

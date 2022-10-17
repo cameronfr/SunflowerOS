@@ -1,0 +1,11 @@
+{
+ "argv": [
+  "/data/data/com.termux/files/home/MagicLeap2-Synced/LaunchOnMainAndroidProcess/launchOnMainAndroidProcess",
+  "/data/data/com.termux/files/home/MagicLeap2-Synced/kernel_launcher_so/libkernelLaunch.so -f {connection_file}"
+ ],
+ "display_name": "Python 3 LaunchOnMainAndroidProcess (ipykernel)",
+ "language": "python",
+ "metadata": {
+  "debugger": true
+ }
+}
