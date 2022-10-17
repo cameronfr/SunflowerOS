@@ -117,6 +117,19 @@ diff -r cppyy-backend/cling/src/main/CMakeLists.txt cppyy-backend-modified-tmp/c
 >                      COMMAND ln -fs rootcling genreflex
 
 
+diff -r cppyy-backend/cling/src/interpreter/llvm/src/lib/Support/Unix/DynamicLibrary.inc cppyy-backend-modified-tmp/cling/src/interpreter/llvm/src/lib/Support/Unix/DynamicLibrary.inc
+49c51,62
+<   return ::dlsym(Handle, Symbol);
+---
+>   dlerror();
+>   void *out = ::dlsym(RTLD_DEFAULT, Symbol);
+>   if (out) {
+>     return out;
+>   }
+>   out = ::dlsym(Handle, Symbol);
+>   return out;
+>  // Not sure why, but if you load python/cppyy in a shared lib, dlsym RTLD_DEFAULT finds different symbols from dlsym (dlopen(null, RTLD_LAZY), "..."). So have to check both. 
+
 diff get_device_api_level_inlines.txt /data/data/com.termux/files/usr/include/bits/get_device_api_level_inlines.h
 34c39,40
 < int atoi(const char* __s) __attribute_pure__;

@@ -135,6 +135,7 @@ cd /data/data/com.termux/files/usr/lib/python3.10/site-packages/cppyy_backend/li
  patchelf --add-needed libCling.so libcppyy_backend.so
  cd /data/data/com.termux/files/usr/lib/python3.10/site-packages/
  patchelf --add-needed libcppyy_backend.so libcppyy.cpython-310.so
+ patchelf --set-rpath "/data/data/com.termux/files/usr/lib:/data/data/com.termux/files/usr/lib:/data/data/com.termux/files/usr/lib:/data/data/com.termux/files/usr/lib:\$ORIGIN/cppyy_backend/lib" libcppyy.cpython-310.so
 
  LD_LIBRARY_PATH=`pwd` python3 ... import cppyy
 
@@ -165,3 +166,4 @@ index b5105e1..4ebcf46 100644
 termux proc fix
 https://github.com/termux/termux-packages/issues/11867 (install psutil 5.9.0)
 If look at jupyter/manager.py, see that it starts kernel process and assumes kernel runs in process it starts. so need to make sure is_alive returns true by keeping launchOnMainAndroidProcess process alive.
+Restart kernel with kill -9 `pgrep sandbox_runner` && kill -9 `pgrep launchOnMain` (jupyter will start it again automatically)

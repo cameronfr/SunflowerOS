@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <android/log.h>
+#include <jni.h>
 
 // Redirects stdout, stderr to android log. 
 // https://codelab.wordpress.com/2014/11/03/how-to-use-standard-output-streams-for-logging-in-android-apps/
@@ -14,7 +15,7 @@ static const char *tag = "Sunflower kernel_launcher_so";
 static void *thread_func(void*)
 {
     ssize_t rdsz;
-    char buf[128];
+    char buf[512];
     while((rdsz = read(pfd[0], buf, sizeof buf - 1)) > 0) {
         if(buf[rdsz - 1] == '\n') --rdsz;
         buf[rdsz] = 0;  /* add null-terminator */
@@ -42,11 +43,17 @@ int start_logger(const char *app_name)
     return 0;
 }
 
+// Get Java vm pointer
+void *java_vm;
+extern "C" jint JNI_OnLoad(JavaVM *vm, void *reserved) {
+  java_vm = vm;
+  return JNI_VERSION_1_6;
+} 
 
 int main(int argc, char *argv[]) {
   start_logger("Sunflower kernel_launcher_so");
 
-  printf("Got %d args\n", argc);
+  printf("Sunflower kernel_launcher_so got %d args\n", argc);
   for (int i = 0; i < argc; i++) {
     printf("Arg %d: %s\n", i, argv[i]);
   }
@@ -56,6 +63,12 @@ int main(int argc, char *argv[]) {
   // cppyy needs stuff added in LD_LIBRARY_PATH
   setenv("PATH", "/data/data/com.termux/files/usr/bin", 1);
   setenv("LD_LIBRARY_PATH", "/data/data/com.termux/files/usr/lib/python3.10/site-packages/cppyy_backend/lib", 1);
+  // set Java vm pointer as env var that we can access in python / cppyy
+
+  // have to convert it to null terminated string first
+  char buf[100];
+  sprintf(buf, "%p", java_vm);
+  setenv("JAVA_VM_PTR", buf, 1);
 
   Py_Initialize();
   // Fake argc, argv for python (since launch_new_instance expects sys.argv to have "-f kernel-<id>.json")
@@ -66,7 +79,6 @@ int main(int argc, char *argv[]) {
   }
   PySys_SetArgv(argc, wargv);
 
-  printf("Running code\n");
   char *pythonCode = 
     "import sys\n"
     "print('Sys.executable: ' + sys.executable)\n"
