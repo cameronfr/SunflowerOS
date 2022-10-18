@@ -2,3 +2,6 @@ trash/
 .DS_Store
 .cache/
 .vscode
+**/Assets/_PoiyomiShaders
+**/Assets/Avatars
+**/Assets/Packages
