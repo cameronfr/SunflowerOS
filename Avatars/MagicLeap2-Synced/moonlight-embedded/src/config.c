@@ -95,10 +95,10 @@ char* get_path(char* name, char* extra_data_dirs) {
   if (!xdg_config_dir)
     xdg_config_dir = home_dir;
 
-  char *data_dirs = malloc(strlen(USER_PATHS) + 1 + strlen(xdg_config_dir) + 1 + strlen(home_dir) + 1 + strlen(DEFAULT_CONFIG_DIR) + 1 + strlen(extra_data_dirs) + 2);
+  char *data_dirs = (char*)malloc(strlen(USER_PATHS) + 1 + strlen(xdg_config_dir) + 1 + strlen(home_dir) + 1 + strlen(DEFAULT_CONFIG_DIR) + 1 + strlen(extra_data_dirs) + 2);
   sprintf(data_dirs, USER_PATHS ":%s:%s/" DEFAULT_CONFIG_DIR ":%s/", xdg_config_dir, home_dir, extra_data_dirs);
 
-  char *path = malloc(strlen(data_dirs)+strlen(MOONLIGHT_PATH)+strlen(name)+2);
+  char *path = (char*)malloc(strlen(data_dirs)+strlen(MOONLIGHT_PATH)+strlen(name)+2);
   if (path == NULL) {
     fprintf(stderr, "Not enough memory\n");
     exit(-1);

@@ -167,3 +167,10 @@ termux proc fix
 https://github.com/termux/termux-packages/issues/11867 (install psutil 5.9.0)
 If look at jupyter/manager.py, see that it starts kernel process and assumes kernel runs in process it starts. so need to make sure is_alive returns true by keeping launchOnMainAndroidProcess process alive.
 Restart kernel with kill -9 `pgrep sandbox_runner` && kill -9 `pgrep launchOnMain` (jupyter will start it again automatically)
+
+// Sunshine on mac
+// Use this formula 
+// https://github.com/LizardByte/Sunshine/discussions/391
+brew install --build-from-source sunshine.rb
+mkdir ~/.config/sunshine // important
+sunshine

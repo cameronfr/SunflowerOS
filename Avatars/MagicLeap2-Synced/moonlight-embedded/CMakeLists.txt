@@ -27,7 +27,8 @@ SET(GAMESTREAM_INCLUDE_DIR ./libgamestream)
 include_directories("${PROJECT_BINARY_DIR}")
 add_subdirectory(libgamestream)
 
-add_executable(moonlight ${SRC_LIST})
+#add_executable(moonlight ${SRC_LIST})
+add_library(moonlight SHARED ${SRC_LIST})
 target_link_libraries(moonlight m)
 target_link_libraries(moonlight gamestream)
 

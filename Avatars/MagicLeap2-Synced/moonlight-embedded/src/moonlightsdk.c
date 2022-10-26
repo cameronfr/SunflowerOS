@@ -86,7 +86,7 @@ static int get_app_id(PSERVER_DATA server, const char *name) {
 }
 
 void onFrame(AVFrame *frame) {
-  printf("New frame has format YUV? %d\n", frame->format == AV_PIX_FMT_YUV420P);
+  // printf("New frame has format YUV? %d\n", frame->format == AV_PIX_FMT_YUV420P);
 }
 
 static void help() {
@@ -151,14 +151,19 @@ static void pair_check(PSERVER_DATA server) {
   }
 }
 
-extern void init_config() {
+extern bool moon_init_config(char *address, char *app) {
   // Sets to default values, also sets a key dir.
   config_parse(0, NULL, &config);
+  config.address = address;
+  config.stream.width = 1920;
+  config.stream.height = 1080;
+  config.app = app;
   // config.address = "192.168.0.4";
+  return true;
 }
 
 // Depends on config object
-extern bool init_server_connection() {
+extern bool moon_init_server_connection() {
   printf("Connecting to %s, using key_dir %s\n", config.address, config.key_dir);
 
   int ret;
@@ -184,7 +189,7 @@ extern bool init_server_connection() {
 }
 
 // Depends on config object and server object
-extern bool pair_server() {
+extern bool moon_pair_server() {
   // TODO: I think this blocks main thread
   char pin[5];
   if (config.pin > 0 && config.pin <= 9999) {
@@ -204,7 +209,7 @@ extern bool pair_server() {
 }
 
 // Depends on config object and server object
-extern bool start_stream(void (*on_frame)(AVFrame*)) {
+extern bool moon_start_stream(/*void (*on_frame)(AVFrame*)*/void* on_frame) {
   printf("Starting stream...\n");
   if(!server.paired) {
     fprintf(stderr, "You must pair with the PC first\n");
@@ -267,9 +272,10 @@ extern bool start_stream(void (*on_frame)(AVFrame*)) {
   }
 
   LiStartConnection(&server.serverInfo, &config.stream, &connection_callbacks, &video_decoder_callbacks, &audio_decoder_callbacks, on_frame, drFlags, config.audio_device, 0);
+  return true;
 }
 
-extern void stop_stream() {
+extern void moon_stop_stream() {
   LiStopConnection();
 
   // if (config.quitappafter) {
@@ -297,7 +303,7 @@ int main(int argc, char* argv[]) {
   }
 
   if (config.address == NULL) {
-    config.address = malloc(MAX_ADDRESS_SIZE);
+    config.address = (char*)malloc(MAX_ADDRESS_SIZE);
     if (config.address == NULL) {
       perror("Not enough memory");
       exit(-1);
@@ -316,7 +322,7 @@ int main(int argc, char* argv[]) {
   if (access(host_config_file, R_OK) != -1)
     config_file_parse(host_config_file, &config);
 
-  init_server_connection();
+  moon_init_server_connection();
   printf("paired? %d\n", server.paired);
 
   if (config.debug_level > 0)
@@ -339,10 +345,10 @@ int main(int argc, char* argv[]) {
         // sdlinput_init(config.mapping);
     }
 
-    start_stream(&onFrame);
+    moon_start_stream((void*)&onFrame);
     while(true) {}
   } else if (strcmp("pair", config.action) == 0) {
-    pair_server();
+    moon_pair_server();
   } else if (strcmp("unpair", config.action) == 0) {
     if (gs_unpair(&server) != GS_OK) {
       fprintf(stderr, "Failed to unpair to server: %s\n", gs_error);

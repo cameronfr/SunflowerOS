@@ -22,7 +22,7 @@
 #include <stdio.h>
 #include <opus_multistream.h>
 
-static OpusMSDecoder* decoder;
+static OpusMSDecoder* audio_decoder;
 static short* pcmBuffer;
 static int samplesPerFrame;
 // static SDL_AudioDeviceID dev;
@@ -30,11 +30,11 @@ static int channelCount;
 
 static int sdl_renderer_init(int audioConfiguration, POPUS_MULTISTREAM_CONFIGURATION opusConfig, void* context, int arFlags) {
   int rc;
-  decoder = opus_multistream_decoder_create(opusConfig->sampleRate, opusConfig->channelCount, opusConfig->streams, opusConfig->coupledStreams, opusConfig->mapping, &rc);
+  audio_decoder = opus_multistream_decoder_create(opusConfig->sampleRate, opusConfig->channelCount, opusConfig->streams, opusConfig->coupledStreams, opusConfig->mapping, &rc);
 
   channelCount = opusConfig->channelCount;
   samplesPerFrame = opusConfig->samplesPerFrame;
-  pcmBuffer = malloc(sizeof(short) * channelCount * samplesPerFrame);
+  pcmBuffer = (short *)malloc(sizeof(short) * channelCount * samplesPerFrame);
   if (pcmBuffer == NULL)
     return -1;
 
@@ -59,9 +59,9 @@ static int sdl_renderer_init(int audioConfiguration, POPUS_MULTISTREAM_CONFIGURA
 }
 
 static void sdl_renderer_cleanup() {
-  if (decoder != NULL) {
-    opus_multistream_decoder_destroy(decoder);
-    decoder = NULL;
+  if (audio_decoder != NULL) {
+    opus_multistream_decoder_destroy(audio_decoder);
+    audio_decoder = NULL;
   }
 
   if (pcmBuffer != NULL) {
@@ -76,7 +76,7 @@ static void sdl_renderer_cleanup() {
 }
 
 static void sdl_renderer_decode_and_play_sample(char* data, int length) {
-  int decodeLen = opus_multistream_decode(decoder, data, length, pcmBuffer, samplesPerFrame, 0);
+  int decodeLen = opus_multistream_decode(audio_decoder, (const unsigned char *)data, length, pcmBuffer, samplesPerFrame, 0);
   if (decodeLen > 0) {
     // SDL_QueueAudio(dev, pcmBuffer, decodeLen * channelCount * sizeof(short));
   } else {

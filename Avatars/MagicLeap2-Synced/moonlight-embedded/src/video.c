@@ -26,19 +26,21 @@
 #define DECODER_BUFFER_SIZE 256*1024
 #define SLICES_PER_FRAME 4
 
-static char* ffmpeg_buffer;
+static unsigned char* ffmpeg_buffer;
 // define on_frame_received function pointer
 void (*on_frame_received)(AVFrame *frame);
 
 static int setup(int videoFormat, int width, int height, int redrawRate, void* context, int drFlags) {
-  on_frame_received = context;
+  // on_frame_received = context;
+  // cast to correct type
+  on_frame_received = (void (*)(AVFrame *frame)) context;
 
   if (ffmpeg_init(videoFormat, width, height, SLICE_THREADING, 2, SLICES_PER_FRAME) < 0) {
     fprintf(stderr, "Couldn't initialize video decoding\n");
     return -1;
   }
 
-  ffmpeg_buffer = malloc(DECODER_BUFFER_SIZE + AV_INPUT_BUFFER_PADDING_SIZE);
+  ffmpeg_buffer = (unsigned char*) malloc(DECODER_BUFFER_SIZE + AV_INPUT_BUFFER_PADDING_SIZE);
   if (ffmpeg_buffer == NULL) {
     fprintf(stderr, "Not enough memory\n");
     ffmpeg_destroy();
@@ -54,6 +56,31 @@ static void cleanup() {
 
 static int submit_decode_unit(PDECODE_UNIT decodeUnit) {
   if (decodeUnit->fullLength < DECODER_BUFFER_SIZE) {
+    if (decodeUnit->frameType == FRAME_TYPE_IDR) {
+      // Submit sps, pps to decoder (ffmpeg mediacodec special support thing)
+      char *sps;
+      int sps_length;
+      char *pps;
+      int pps_length;
+
+      PLENTRY entry = decodeUnit->bufferList;
+      while (entry != NULL) {
+        if (entry->length > 0) {
+          if (entry->bufferType == BUFFER_TYPE_SPS) {
+            sps = entry->data;
+            sps_length = entry->length;
+          } else if (entry->bufferType == BUFFER_TYPE_PPS) {
+            pps = entry->data;
+            pps_length = entry->length;
+          }
+        }
+        entry = entry->next;
+      }
+      if (sps_length == 0 || pps_length == 0) {
+        fprintf(stderr, "No SPS or PPS found in IDR frame data");
+      }
+      ffmpeg_submit_sps_pps(sps, sps_length, pps, pps_length);
+    }
     PLENTRY entry = decodeUnit->bufferList;
     int length = 0;
     while (entry != NULL) {

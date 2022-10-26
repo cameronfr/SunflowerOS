@@ -32,6 +32,17 @@
 #include <stdio.h>
 #include <stdbool.h>
 
+#include <jni.h>
+
+//JNI_Onload
+jint JNI_OnLoad(JavaVM* vm, void* reserved)
+{
+  printf("JNI_OnLoad called, setting libavcodec vm;");
+  av_jni_set_java_vm(vm, NULL);
+  return JNI_VERSION_1_6;
+}
+
+
 // General decoder and renderer state
 static AVPacket* pkt;
 static const AVCodec* decoder;
@@ -49,6 +60,8 @@ static struct SwsContext *sws_ctx;
 
 #define BYTES_PER_PIXEL 4
 
+
+
 // This function must be called before
 // any other decoding functions
 int ffmpeg_init(int videoFormat, int width, int height, int perf_lvl, int buffer_count, int thread_count) {
@@ -58,6 +71,8 @@ int ffmpeg_init(int videoFormat, int width, int height, int perf_lvl, int buffer
   avcodec_register_all();
 #endif
 
+
+  // av_log_set_level(AV_LOG_DEBUG);
   pkt = av_packet_alloc();
   if (pkt == NULL) {
     printf("Couldn't allocate packet\n");
@@ -67,15 +82,18 @@ int ffmpeg_init(int videoFormat, int width, int height, int perf_lvl, int buffer
   ffmpeg_decoder = perf_lvl & VAAPI_ACCELERATION ? VAAPI : SOFTWARE;
   switch (videoFormat) {
     case VIDEO_FORMAT_H264:
+      // decoder = avcodec_find_decoder_by_name("h264_mediacodec");
       decoder = avcodec_find_decoder_by_name("h264");
       break;
     case VIDEO_FORMAT_H265:
+      // decoder = avcodec_find_decoder_by_name("hevc_mediacodec");
       decoder = avcodec_find_decoder_by_name("hevc");
       break;
   }
 
   if (decoder == NULL) {
     printf("Couldn't find decoder\n");
+    printf("Was looking for h264_mediacodec/hevc_mediacodec specifically, make sure ffmpeg is built with it\n");
     return -1;
   }
 
@@ -106,14 +124,8 @@ int ffmpeg_init(int videoFormat, int width, int height, int perf_lvl, int buffer
   decoder_ctx->height = height;
   decoder_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
 
-  int err = avcodec_open2(decoder_ctx, decoder, NULL);
-  if (err < 0) {
-    printf("Couldn't open codec");
-    return err;
-  }
-
   dec_frames_cnt = buffer_count;
-  dec_frames = malloc(buffer_count * sizeof(AVFrame*));
+  dec_frames = (AVFrame **)malloc(buffer_count * sizeof(AVFrame*));
   if (dec_frames == NULL) {
     fprintf(stderr, "Couldn't allocate frames");
     return -1;
@@ -171,9 +183,32 @@ AVFrame* ffmpeg_get_frame(bool native_frame) {
   } else if (err != AVERROR(EAGAIN)) {
     char errorstring[512];
     av_strerror(err, errorstring, sizeof(errorstring));
-    fprintf(stderr, "Receive failed - %d/%s\n", err, errorstring);
+    // fprintf(stderr, "Receive failed - %d/%s\n", err, errorstring);
   }
   return NULL;
+}
+
+void ffmpeg_submit_sps_pps(char *sps, int sps_len, char *pps, int pps_len) {
+  // sps, pps are already NALU data
+  if (decoder_ctx->extradata == NULL) {
+    unsigned char *extradata = (unsigned char*) malloc(sps_len + pps_len);
+    memcpy(extradata, sps, sps_len);
+    memcpy(extradata + sps_len, pps, pps_len);
+    decoder_ctx->extradata = extradata;
+    decoder_ctx->extradata_size = sps_len + pps_len;
+    printf("Submitted SPS/PPS to mediacodec decoder\n");
+    printf("sps first 4 bytes: %02x %02x %02x %02x\n", sps[0], sps[1], sps[2], sps[3]);
+    printf("pps first 4 bytes: %02x %02x %02x %02x\n", pps[0], pps[1], pps[2], pps[3]);
+
+    int err = avcodec_open2(decoder_ctx, decoder, NULL);
+    if (err < 0) {
+      char errorstring[512];
+      av_strerror(err, errorstring, sizeof(errorstring));
+      printf("Couldn't open codec2 - %d/%s\n", err, errorstring);
+    } else {
+      fprintf(stderr,"Opened mediacodec decoder\n");
+    }
+  }
 }
 
 // packets must be decoded in order
@@ -184,12 +219,16 @@ int ffmpeg_decode(unsigned char* indata, int inlen) {
   pkt->data = indata;
   pkt->size = inlen;
 
-  err = avcodec_send_packet(decoder_ctx, pkt);
-  if (err < 0) {
-    char errorstring[512];
-    av_strerror(err, errorstring, sizeof(errorstring));
-    fprintf(stderr, "Decode failed - %s\n", errorstring);
+  if (decoder_ctx->extradata != NULL) {
+    err = avcodec_send_packet(decoder_ctx, pkt);
+    if (err < 0) {
+      char errorstring[512];
+      av_strerror(err, errorstring, sizeof(errorstring));
+      fprintf(stderr, "Decode failed - %s\n", errorstring);
+    }
+    return err < 0 ? err : 0;
   }
 
-  return err < 0 ? err : 0;
+  printf("No decoder opened yet\n");
+  return -1;
 }

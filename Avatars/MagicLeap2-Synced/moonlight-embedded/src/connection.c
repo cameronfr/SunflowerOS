@@ -64,6 +64,7 @@ static void connection_terminated(int errorCode) {
 }
 
 static void connection_log_message(const char* format, ...) {
+  printf("LimeLog: ");
   va_list arglist;
   va_start(arglist, format);
   vprintf(format, arglist);
