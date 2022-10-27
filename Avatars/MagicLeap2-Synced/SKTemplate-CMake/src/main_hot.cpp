@@ -4,8 +4,6 @@
 #include <moonlightsdk.h>
 #include <stereokit.h>
 #include <stereokit_ui.h>
-#include <libavcodec/avcodec.h>
-#include <libswscale/swscale.h>
 #endif 
 
 using namespace sk;
@@ -40,26 +38,17 @@ material_t video_mat;
 tex_t video_tex;
 
 model_t avatar;
-AVFrame* latestFrameRGBA;
-// sws_ctx
-struct SwsContext *sws_ctx;
+uint8_t *latestFrameRGBA;
+int latestFrameWidth;
+int latestFrameHeight;
 
-void on_moonlight_frame(AVFrame *frame) {
-  // think this happens in a different thread
-  if (sws_ctx == nullptr) {
-    sws_ctx = sws_getContext(frame->width, frame->height, (AVPixelFormat)frame->format, frame->width, frame->height, AV_PIX_FMT_RGBA, SWS_BILINEAR, NULL, NULL, NULL);
-  }
-  if (latestFrameRGBA == nullptr) {
-    latestFrameRGBA = av_frame_alloc();
-    latestFrameRGBA->width = frame->width;
-    latestFrameRGBA->height = frame->height;
-    latestFrameRGBA->format = AV_PIX_FMT_RGBA;
-    av_frame_get_buffer(latestFrameRGBA, 0);
-  }
-  sws_scale(sws_ctx, (uint8_t const* const*)frame->data, frame->linesize, 0, frame->height, latestFrameRGBA->data, latestFrameRGBA->linesize);
-
+void on_moonlight_frame(uint8_t *frame, int width, int height) {
+  free(latestFrameRGBA); //TODO: it might free when SK is drawing it.
+  latestFrameRGBA = frame;
+  latestFrameWidth = width;
+  latestFrameHeight = height;
   // idk why, but if have this here it crashes jupyer notebook when try to cleanup, w/o error
-  // tex_set_colors(video_tex, latestFrameRGBA->width, latestFrameRGBA->height, latestFrameRGBA->data[0]);
+  // tex_set_colors(video_tex, latestFrameRGBA->width, latestFrameRGBA->height, latestFrameRGBA->data[0]); Prob because this happens not on sk thread.
 }
 
 void setup() {
@@ -101,7 +90,7 @@ void update_fn() {
   // render_add_mesh(video_mesh, video_mat, pose_matrix(desktop_pose, vec3_one * 0.2));
 
   if (latestFrameRGBA != nullptr) {
-    tex_set_colors(video_tex, latestFrameRGBA->width, latestFrameRGBA->height, latestFrameRGBA->data[0]);
+    tex_set_colors(video_tex, latestFrameWidth, latestFrameHeight, latestFrameRGBA);
   }
 }
 
@@ -111,8 +100,6 @@ void update() {
 
 void cleanup() {
   // moon_stop_stream();
-  sws_freeContext(sws_ctx);
-  av_frame_free(&latestFrameRGBA);
 
   mesh_release(cube_mesh);
   material_release(cube_mat);

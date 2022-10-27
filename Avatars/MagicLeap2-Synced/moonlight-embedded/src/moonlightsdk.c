@@ -50,9 +50,6 @@
 #include <arpa/inet.h>
 #include <openssl/rand.h>
 
-#include <libavcodec/avcodec.h>
-
-
 static CONFIGURATION config;
 static SERVER_DATA server;
 
@@ -83,10 +80,6 @@ static int get_app_id(PSERVER_DATA server, const char *name) {
     list = list->next;
   }
   return -1;
-}
-
-void onFrame(AVFrame *frame) {
-  // printf("New frame has format YUV? %d\n", frame->format == AV_PIX_FMT_YUV420P);
 }
 
 static void help() {
@@ -155,8 +148,10 @@ extern bool moon_init_config(char *address, char *app) {
   // Sets to default values, also sets a key dir.
   config_parse(0, NULL, &config);
   config.address = address;
-  config.stream.width = 1920;
-  config.stream.height = 1080;
+  // config.stream.width = 1920;
+  // config.stream.height = 1080;
+  config.stream.width = 2560;
+  config.stream.height = 1600;
   config.app = app;
   // config.address = "192.168.0.4";
   return true;
@@ -206,6 +201,10 @@ extern bool moon_pair_server() {
     printf("Succesfully paired\n");
     return true;
   }
+}
+
+void onFrame(uint8_t *data, int width, int height) {
+  // for testing
 }
 
 // Depends on config object and server object

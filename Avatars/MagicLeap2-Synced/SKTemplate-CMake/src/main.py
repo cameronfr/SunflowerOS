@@ -1,9 +1,16 @@
 # Can't Unload/Reload header file if it has #pragma once
+# #includes are cached by cling
+# on throw exception, libc++_shared just SIGABRTs
+# on JNI exception in sandbox_runner, ssh watch process on termux crashes? maybe?
 
 #%%#
 
 import cppyy
 import os
+import asyncio
+
+# import cppyy.ll
+# cppyy.ll.set_signals_as_exception(True) # performance impact apparently. catches some segfaults and JNI faults, but seems state is messed up after catch those and have to restart kernel anyways. c++ exceptions still broken.
 
 cppyy.cppdef("""
 #include <stdio.h>
@@ -50,27 +57,21 @@ cppyy.add_include_path(os.path.join(moonlightEmbeddedPath, "third_party/moonligh
 cppyy.add_library_path(os.path.join(moonlightEmbeddedPath, "libgamestream"))
 
 cppyy.add_include_path(os.path.expanduser("~/MagicLeap2-Synced/moonlight-embedded/src/"))
+cppyy.add_include_path(os.path.expanduser("~/libyuv/include"))
+cppyy.add_library_path(os.path.expanduser("~/libyuv/"))
 # cppyy.add_library_path(os.path.expanduser("~/MagicLeap2-Synced/moonlight-embedded/"))
 # cppyy.load_library("libmoonlight.so")
-cppyy.load_library("libswscale.so")
-cppyy.load_library("libavcodec.so")
+cppyy.load_library("libopus.so")
+cppyy.load_library("libyuv.so")
 cppyy.load_library("libgamestream.so")
 
 #%%#
 
-#include <moonlightsdk.h>
 cppyy.cppdef("""
 #include <stereokit.h>
 #include <stereokit_ui.h>
 extern "C" {
-  #include <libavcodec/avcodec.h>
-  #include <libavcodec/jni.h>
-  #include <libswscale/swscale.h>
 }
-""")
-# Initialize avcodec with JavaVM pointer
-cppyy.cppexec("""
-av_jni_set_java_vm(java_vm, NULL);
 """)
 
 nsCount = 0
@@ -105,7 +106,8 @@ def reloadMoonStream():
   #   cppyy.cppexec(f"""
   #   {moonNsName}::moon_stop_stream();
   #   """)
-  fileContents = open(os.path.expanduser("~/MagicLeap2-Synced/moonlight-embedded/src/moonlightsdk.c"), "r").read()
+  srcPath = os.path.expanduser("~/MagicLeap2-Synced/moonlight-embedded/src/")
+  includeFile = lambda name: open(os.path.join(srcPath, name), "r").read()
   moonNsName = f"""moonStream{nsCount}"""
   cppyy.cppdef(f"""
   extern "C" {{
@@ -119,6 +121,7 @@ def reloadMoonStream():
     #include <libgamestream/xml.h>
 
     #include <opus/opus_multistream.h>
+    #include <libyuv.h>
     #include <stdio.h>
     #include <stdlib.h>
     #include <unistd.h>
@@ -129,69 +132,62 @@ def reloadMoonStream():
   }}
   // These headers need to be extern C decl. If try to redefine it within the namespace, will get redefition errors. If don't redefine it in subsequent namespaces, its symbols won't be found. Soln is to define outside namespace. These are headers that are included by moonlightsdk.c for two external libs it uses.
 
-  #undef _FFMPEG_H_
   #undef _CONFIG_H_
   // These need to be defined again, since they are pragma once but will only be defined in the first namespace
 
   namespace {moonNsName} {{
-    #include "moonlightsdk.c"
     // include all the cpp files that need to be compiled.
-    #include "audio.c"
-    #include "config.c"
-    #include "connection.c"
-    #include "ffmpeg.c"
-    #include "video.c"
+    // if use #include "...", cling will cache the file contents
+    {includeFile("moonlightsdk.c")}
+    {includeFile("audio.c")}
+    {includeFile("config.c")}
+    {includeFile("connection.c")}
+    {includeFile("video.c")}
   }}
   """)
   moonNs = getattr(cppyy.gbl, moonNsName)
-  return
   # start new stream, catch errors
-  startCode = f"""
-  {moonNsName}::moon_init_config("192.168.0.4", "Desktop");
-  {moonNsName}::moon_init_server_connection();
-  {moonNsName}::moon_start_stream((void*)&{mainHotNsName}::on_moonlight_frame);
-  """
-  cppyy.cppexec(f"""
-  // catch exceptions, including segfaults
-  try {{
-    {startCode}
-  }} catch (...) {{
-    printf("Exception in running hot-reloaded moonlightsdk");
-  }}
-  """)
-  # stop stream after 3 seconds
-  cppyy.cppexec(f"""
-  std::thread t([]() {{
-    std::this_thread::sleep_for(std::chrono::seconds(3));
-    try {{
-      {moonNsName}::moon_stop_stream();
-    }} catch (...) {{
-      printf("Exception in stopping hot-reloaded moonlightsdk");
+  cppyy.cppdef(f"""
+  namespace {moonNsName} {{
+    void testStart() {{
+      try {{
+        {moonNsName}::moon_init_config("192.168.0.4", "Desktop");
+        {moonNsName}::moon_init_server_connection();
+        {moonNsName}::moon_start_stream((void*)&{mainHotNsName}::on_moonlight_frame);
+      }} catch(...) {{
+        printf("Error testing start, caught exception");
+      }}
     }}
-  }});
-  t.detach();
+    void testStop() {{
+      try {{
+        {moonNsName}::moon_stop_stream();
+      }} catch(...) {{
+        printf("Error testing stop, caught exception");
+      }}
+    }}
+  }}
   """)
 
 #%%#
-import asyncio
-
-reloadMoonStream()
 
 reloadMainHot()
 mainHotNs.setup()
-# add mainHotNS.update to the jupyter async event loop
+
+reloadMoonStream()
+moonNs.testStart()
+# add mainHotNS.update to the jupyter async event loopp
 # sk init needs to happen on same thread as update, so do this cause it's easier rn
 async def mainHotUpdate():
   while True:
     mainHotNs.update()
     await asyncio.sleep(0.00)
 task = asyncio.create_task(mainHotUpdate())
+await asyncio.sleep(30)
 task.cancel()
+moonNs.testStop()
 
-
-# for i in range(2000):
-#   mainHotNs.update()
 mainHotNs.cleanup()
+
 #%%#
 
 # ----- MISCELLANEOUS -----
@@ -242,3 +238,64 @@ void list_codec_5() {
 }
 """)
 cppyy.gbl.list_codec_5()
+
+import cppyy
+nsCount = 0
+
+nsCount += 1
+cppyy.cppdef(f"""
+#include <jni.h>
+void codec_info_{nsCount}() {{
+  JNIEnv *env;
+  java_vm->GetEnv((void **)&env, JNI_VERSION_1_6);
+  // get OMX.mesa.video_decoder.avc 
+  jclass media_codec = env->FindClass("android/media/MediaCodec");
+  jmethodID create_by_codec_name = env->GetStaticMethodID(media_codec, "createByCodecName", "(Ljava/lang/String;)Landroid/media/MediaCodec;");
+  jstring codec_name = env->NewStringUTF("OMX.mesa.video_decoder.avc");
+  jobject codec = env->CallStaticObjectMethod(media_codec, create_by_codec_name, codec_name);
+  // get codec info
+  jmethodID get_codec_info = env->GetMethodID(media_codec, "getCodecInfo", "()Landroid/media/MediaCodecInfo;");
+  jobject codec_info = env->CallObjectMethod(codec, get_codec_info);
+  // get codec capabilities
+  jmethodID get_capabilities_for_type = env->GetMethodID(env->GetObjectClass(codec_info), "getCapabilitiesForType", "(Ljava/lang/String;)Landroid/media/MediaCodecInfo$CodecCapabilities;");
+  jstring mime_type = env->NewStringUTF("video/avc");
+  jobject codec_capabilities = env->CallObjectMethod(codec_info, get_capabilities_for_type, mime_type);
+  // check if supports fused idr using isFeatureSupported(CodecCapabilities.FEATURE_LowLatency)
+  jmethodID is_feature_supported = env->GetMethodID(env->GetObjectClass(codec_capabilities), "isFeatureSupported", "(Ljava/lang/String;)Z");
+  jstring feature_low_latency = env->NewStringUTF("low-latency");
+  jboolean is_feature_supported_bool = env->CallBooleanMethod(codec_capabilities, is_feature_supported, feature_low_latency);
+  if (is_feature_supported_bool) {{
+    printf("OMX.mesa.video_decoder.avc supports FEATURE_LowLatency");
+  }} else {{
+    printf("OMX.mesa.video_decoder.avc does not support FEATURE_LowLatency");
+  }}
+  // check if supports adaptive playback using isFeatureSupported(CodecCapabilities.FEATURE_AdaptivePlayback)
+  jstring feature_adaptive_playback = env->NewStringUTF("adaptive-playback");
+  is_feature_supported_bool = env->CallBooleanMethod(codec_capabilities, is_feature_supported, feature_adaptive_playback);
+  if (is_feature_supported_bool) {{
+    printf("OMX.mesa.video_decoder.avc supports FEATURE_AdaptivePlayback");
+  }} else {{
+    printf("OMX.mesa.video_decoder.avc does not support FEATURE_AdaptivePlayback");
+  }}
+}}
+void codec_info_wrapped_{nsCount}() {{
+  try {{
+    // catch jni exceptions
+    codec_info_{nsCount}();
+  }} catch (...) {{
+    printf("codec_info_wrapped_{nsCount} failed");
+  }}
+}}
+""")
+method = getattr(cppyy.gbl, f"codec_info_wrapped_{nsCount}")
+method()
+
+
+# Test throwing exception
+# cppyy.cppexec("""
+# try {
+#   throw std::runtime_error("test");
+# } catch(...) {
+#   printf("caught exception");
+# }
+# """)
