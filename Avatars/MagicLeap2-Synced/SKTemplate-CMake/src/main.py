@@ -50,13 +50,13 @@ cppyy.cppdef("""
 
 
 # TODO: segfaulting in zmq sometimes
+# __android_log_print calls seem to take about 5us each
 editorRuntimeNs, editorRuntime = defineInNewNs(f"""
   {includeFile(editorRuntimeDir, "SunflowerEditorRuntime.cpp")}
 """)
 editorRuntime.msgserver_init()
-for i in range(100):
-  editorRuntime.msgserver_inthread_sendlog("test/main_hot.cpp", 10, 4, "hello worlda"+datetime.datetime.now().strftime("%H:%M:%S.%f"))
-  time.sleep(0.01)
+for i in range(1000):
+  editorRuntime.msgserver_inthread_sendlog("test/main_hot.cpp", 10, 4, "hello world"+datetime.datetime.now().strftime("%H:%M:%S.%f"))
 editorRuntime.msgserver_close()
 
 
