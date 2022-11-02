@@ -2,15 +2,21 @@
 # #includes are cached by cling
 # on throw exception, libc++_shared just SIGABRTs
 # on JNI exception in sandbox_runner, ssh watch process on termux crashes? maybe?
+# linking errors with zmq? not because of initial cppyy ldd stuff. prob because it's loaded by jupyter/pyzmq? And android linker has thing where if load one .so with RTLD_GLOBAL, subsequent loaded .so's (e.g. our libCling.so one) won't be able to find it's symbols. Even if libCling.so dlopens libzmq.so, it's dlsym still fails. 
+# - note: use cppyy.gbl.gInterpreter.Load("libpath") to load .so's. cppyy.load_library calls gSystem.Load, which calls gInterpreter.Load, which calls llvm::sys::... , will miss errors otherwise.
+# - trying patchelf --add-needed /data/data/com.termux/files/usr/lib/libzmq.so libCling.so -- it works! dlopening with libzmq that's renamed also works.
+# - seems like only reliable way of dlsym on android is to either dlsym with handle from dlopen, or add-needed the lib to the .so that's doing the dlsyming. Because here's what happened: python imported pyzmq which in it's _backend.so has so dependency libzmq. Then, python imported/dlopened libcling.so. libcling.so tried to access libzmq symbols with both dlsym(RTLD_DEFAULT, ...) and dlsym(dlopen(NULL, ...), ...) which didn't work. Also tried having libcling.so dlopen libzmq.so, and the above two methods still didn't work.
 
 #%%#
 
 import cppyy
+
 import os
 import asyncio
+import json
+import datetime
+import time
 
-# import cppyy.ll
-# cppyy.ll.set_signals_as_exception(True) # performance impact apparently. catches some segfaults and JNI faults, but seems state is messed up after catch those and have to restart kernel anyways. c++ exceptions still broken.
 
 cppyy.cppdef("""
 #include <stdio.h>
@@ -19,6 +25,43 @@ cppyy.cppdef("""
 // fake printf using android log
 #define printf(...) __android_log_print(ANDROID_LOG_INFO, "Sunflower cppyy", __VA_ARGS__)
 """)
+
+globalNsCount = 1
+def includeFile(dir, path):
+  fileContents = open(os.path.join(dir, path), "r").read()
+  return fileContents
+def defineInNewNs(contents):
+  global globalNsCount
+  globalNsCount += 1
+  nsName = f"sfGlobalNs{globalNsCount}"
+  cppyy.cppdef(f"""
+  namespace {nsName} {{
+    {contents}
+  }}
+  """)
+  return (nsName, getattr(cppyy.gbl, nsName))
+
+editorRuntimeDir = os.path.expanduser("~/MagicLeap2-Synced/SKTemplate-CMake/src")
+cppyy.gbl.gInterpreter.Load("/data/data/com.termux/files/usr/lib/libzmq_testrename.so", True)
+cppyy.cppdef("""
+#include <zmq.h>
+#include <math.h>
+""")
+
+
+# TODO: segfaulting in zmq sometimes
+editorRuntimeNs, editorRuntime = defineInNewNs(f"""
+  {includeFile(editorRuntimeDir, "SunflowerEditorRuntime.cpp")}
+""")
+editorRuntime.msgserver_init()
+for i in range(100):
+  editorRuntime.msgserver_inthread_sendlog("test/main_hot.cpp", 10, 4, "hello worlda"+datetime.datetime.now().strftime("%H:%M:%S.%f"))
+  time.sleep(0.01)
+editorRuntime.msgserver_close()
+
+
+# import cppyy.ll
+# cppyy.ll.set_signals_as_exception(True) # performance impact apparently. catches some segfaults and JNI faults, but seems state is messed up after catch those and have to restart kernel anyways. c++ exceptions still broken.
 
 # Set java_vm global variable
 cppyy.cppdef("""
@@ -241,6 +284,17 @@ cppyy.gbl.list_codec_5()
 
 import cppyy
 nsCount = 0
+cppyy.cppdef(f"""
+#include <jni.h> 
+bool checkJNIError(JNIEnv *env) {{
+  if (env->ExceptionCheck()) {{
+    env->ExceptionDescribe();
+    env->ExceptionClear();
+    return true;
+  }}
+  return false;
+}}
+""")
 
 nsCount += 1
 cppyy.cppdef(f"""
@@ -265,17 +319,37 @@ void codec_info_{nsCount}() {{
   jstring feature_low_latency = env->NewStringUTF("low-latency");
   jboolean is_feature_supported_bool = env->CallBooleanMethod(codec_capabilities, is_feature_supported, feature_low_latency);
   if (is_feature_supported_bool) {{
-    printf("OMX.mesa.video_decoder.avc supports FEATURE_LowLatency");
+    printf("OMX.mesa.video_decoder.avc supports FEATURE_LowLatency\\n");
   }} else {{
-    printf("OMX.mesa.video_decoder.avc does not support FEATURE_LowLatency");
+    printf("OMX.mesa.video_decoder.avc does not support FEATURE_LowLatency\\n");
   }}
   // check if supports adaptive playback using isFeatureSupported(CodecCapabilities.FEATURE_AdaptivePlayback)
   jstring feature_adaptive_playback = env->NewStringUTF("adaptive-playback");
   is_feature_supported_bool = env->CallBooleanMethod(codec_capabilities, is_feature_supported, feature_adaptive_playback);
   if (is_feature_supported_bool) {{
-    printf("OMX.mesa.video_decoder.avc supports FEATURE_AdaptivePlayback");
+    printf("OMX.mesa.video_decoder.avc supports FEATURE_AdaptivePlayback\\n");
   }} else {{
-    printf("OMX.mesa.video_decoder.avc does not support FEATURE_AdaptivePlayback");
+    printf("OMX.mesa.video_decoder.avc does not support FEATURE_AdaptivePlayback\\n");
+  }}
+  // get supported vendor parameters getSupportedVendorParameters
+  jmethodID get_supported_vendor_parameters = env->GetMethodID(media_codec, "getSupportedVendorParameters", "()Ljava/util/List<Ljava/lang/String;>;");
+  if (checkJNIError(env)) return;
+  jobject supported_vendor_parameters = env->CallObjectMethod(codec, get_supported_vendor_parameters);
+  if (checkJNIError(env)) return;
+  // list supported vendor parameters
+  jmethodID get_size = env->GetMethodID(env->GetObjectClass(supported_vendor_parameters), "size", "()I");
+  if (checkJNIError(env)) return;
+  jint size = env->CallIntMethod(supported_vendor_parameters, get_size);
+  if (checkJNIError(env)) return;
+  jmethodID get = env->GetMethodID(env->GetObjectClass(supported_vendor_parameters), "get", "(I)Ljava/lang/Object;");
+  if (checkJNIError(env)) return;
+  for (int i = 0; i < size; i++) {{
+    jstring vendor_parameter = (jstring)env->CallObjectMethod(supported_vendor_parameters, get, i);
+    if (checkJNIError(env)) return;
+    const char *vendor_parameter_cstr = env->GetStringUTFChars(vendor_parameter, NULL);
+    if (checkJNIError(env)) return;
+    printf("OMX.mesa.video_decoder.avc supports vendor parameter %s\\n", vendor_parameter_cstr);
+    env->ReleaseStringUTFChars(vendor_parameter, vendor_parameter_cstr);
   }}
 }}
 void codec_info_wrapped_{nsCount}() {{

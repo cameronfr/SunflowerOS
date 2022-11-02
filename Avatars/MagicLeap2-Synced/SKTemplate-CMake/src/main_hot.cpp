@@ -8,6 +8,7 @@
 
 using namespace sk;
 
+test
 bool initialize_stereokit() {
   sk_settings_t settings = {};
   settings.android_java_vm = java_vm;

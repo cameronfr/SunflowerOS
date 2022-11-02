@@ -1,26 +1,56 @@
 // Import the module and reference it with the alias vscode in your code below
+import { json } from 'stream/consumers';
 import * as vscode from 'vscode';
 import * as zmq from 'zeromq';
 
-var sock
+var sock;
 // {[filename]: {[pos]: decoration}}
 var currentDecorations = {}
+
+// This obj instance is used as key for setDecorations -- if change every time, won't remove old 
+const decorationType = vscode.window.createTextEditorDecorationType({
+  backgroundColor: 'green',
+  border: '2px solid white',
+})
 
 export function activate(context: vscode.ExtensionContext) {
   console.log('Activating sunflowereditor extension')
 
-  sock = zmq.socket("rep");
-  sock.connect("tcp://localhost:5895");
+  // Custom timeout is best for now, so don't have to think about low level socket stuff
+  // Also, if want to bind (instead of connect here), need to have ssh remote->local tunnel, which would be annoying.
+  var sockTimeout = 5000
+  var sockTimeoutObj = null
 
-  sock.on("message", msg => {
-    console.log("Received: " + msg.toString());
-    sock.send("Received") //must send something back to unblock
+  var recreateSocket = () => {
+    if (sock) {
+      sock.close()
+      console.log("ZMQ socket timed out, recreating")
+    }
+    sock = zmq.socket('sub')
+    sock.connect('tcp://0.0.0.0:5895')
+    sock.subscribe('')
+    console.log("Started ZMQ subscribe")
+    sock.on('message', onSockMessage)
+    sockTimeoutObj = setTimeout(recreateSocket, sockTimeout)
+  }
+
+  var onSockMessage = (topic, msg) => {
+    console.log(`Received message: [${topic}] ${msg}`)
+    clearTimeout(sockTimeoutObj)
+    sockTimeoutObj = setTimeout(recreateSocket, sockTimeout)
+    if (topic == "heartbeat") {
+      return
+    } 
+
     let msgJSON = JSON.parse(msg.toString())
     parseMessage(msgJSON)
     if (vscode.window.activeTextEditor) {
       drawDecorations(vscode.window.activeTextEditor)
     }
-  });
+
+  }
+
+  recreateSocket()
 
   // on window change, draw decorations
   vscode.window.onDidChangeActiveTextEditor(editor => {
@@ -30,25 +60,21 @@ export function activate(context: vscode.ExtensionContext) {
     }
   }, null, context.subscriptions);
 
-  try {
-    parseMessage({
-      filepath: "/test/main_hot.cpp",
-      line: 10,
-      lineChar: 4,
-      text: "hello",
-      timestamp: new Date().getTime(),
-    })
-    drawDecorations(vscode.window.activeTextEditor)
-  } catch (e) {
-    console.error(e.stack)
-  }
+  // try {
+  //   parseMessage({
+  //     filepath: "/test/main_hot.cpp",
+  //     line: 10,
+  //     lineChar: 4,
+  //     text: "hello",
+  //     timestamp: new Date().getTime(),
+  //   })
+  //   drawDecorations(vscode.window.activeTextEditor)
+  // } catch (e) {
+  //   console.error(e.stack)
+  // }
 }
 
 var drawDecorations = (editor: vscode.TextEditor) => {
-  const decorationType = vscode.window.createTextEditorDecorationType({
-    backgroundColor: 'green',
-    border: '2px solid white',
-  })
 
   let decorations = []
   let filepath = editor.document.fileName
@@ -60,7 +86,9 @@ var drawDecorations = (editor: vscode.TextEditor) => {
       decorations.push(vscodeDecoration)
     }
   }
+
   console.log("decorations len is " + decorations.length)
+  console.log("decorations is ", JSON.stringify(decorations))
 
   editor.setDecorations(decorationType, decorations)
 }
