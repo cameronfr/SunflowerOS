@@ -1,5 +1,7 @@
 # Can't Unload/Reload header file if it has #pragma once
 # #includes are cached by cling
+# If get incrementalExecutor symbol not found on first run, might not get it on subsequent runs, & method will still run, but be terribly broken. (happened on mac). Something todo w/ local symbols?
+# Something wrong with llvm::outs either on cppyy or w/ jupyternotebook / vscode. (works fine on command line cling)
 # on throw exception, libc++_shared just SIGABRTs
 # on JNI exception in sandbox_runner, ssh watch process on termux crashes? maybe?
 # linking errors with zmq? not because of initial cppyy ldd stuff. prob because it's loaded by jupyter/pyzmq? And android linker has thing where if load one .so with RTLD_GLOBAL, subsequent loaded .so's (e.g. our libCling.so one) won't be able to find it's symbols. Even if libCling.so dlopens libzmq.so, it's dlsym still fails. 
@@ -10,13 +12,28 @@
 #%%#
 
 import cppyy
-
 import os
 import asyncio
 import json
 import datetime
 import time
 
+# import clang.cindex
+import shlex
+import ctypes
+cppyy.add_include_path("/opt/homebrew/opt/llvm@14/include")
+# cppyy.gbl.gInterpreter.Load("/opt/homebrew/lib/python3.9/site-packages/clang/native/libclang.dylib")
+cppyy.gbl.gInterpreter.Load("/opt/homebrew/Cellar/llvm@14/14.0.6/lib/libLLVM.dylib")
+cppyy.gbl.gInterpreter.Load("/opt/homebrew/Cellar/llvm@14/14.0.6/lib/libclang-cpp.dylib")
+cppyy.gbl.gInterpreter.Load("/opt/homebrew/Cellar/llvm@14/14.0.6/lib/libclang.dylib")
+cppyy.cppdef("""
+  #include "clang/Basic/SourceManager.h"
+  #include "clang/Frontend/ASTUnit.h"
+  #include "clang/Rewrite/Core/Rewriter.h"
+
+  #include "clang-c/Index.h"
+  #include "clang-c/Rewrite.h"
+""")
 
 cppyy.cppdef("""
 #include <stdio.h>
@@ -28,7 +45,96 @@ cppyy.cppdef("""
 
 globalNsCount = 1
 def includeFile(dir, path):
-  fileContents = open(os.path.join(dir, path), "r").read()
+  # fullPath = os.path.join(dir, path)
+
+  fullPath = "/Users/cameronfranz/Documents/Projects/Sunflower/SunflowerOS/Repo/Avatars/MagicLeap2-Synced/SKTemplate-CMake/src/SunflowerEditorRuntime.cpp" 
+  fileContents = open(fullPath, "r").read()
+  # Basically want output of cppyy.gbl.gInterpreter.ProcessLine(".I")
+  clangArgs = shlex.split(cppyy.gbl.gInterpreter.GetIncludePath()) + ["-resource-dir", cppyy.gbl.CppyyLegacy.GetROOT().GetEtcDir().Data() + "cling/lib/clang/9.0.1"]  
+  " ".join(clangArgs)
+  # index = clang.cindex.Index.create()
+  index2 = cppyy.gbl.clang_createIndex(0, 0)
+  # tu = index.parse(fullPath, args=clangArgs, unsaved_files=[(fullPath, fileContents)]) # parses from string, not file
+  tu2 = cppyy.gbl.clang_parseTranslationUnit(index2, fullPath.encode("utf-8"), clangArgs, len(clangArgs), cppyy.nullptr, 0, 0)
+  # tu = index.parse(fullPath, args=clangArgs)
+
+  for i in range(cppyy.gbl.clang_getNumDiagnostics(tu2)):
+    diag = cppyy.gbl.clang_getDiagnostic(tu2, i)
+    diagCXStr = cppyy.gbl.clang_formatDiagnostic(diag, cppyy.gbl.clang_defaultDiagnosticDisplayOptions())
+    diagStr = cppyy.gbl.clang_getCString(diagCXStr)
+    diagSeverity = cppyy.gbl.clang_getDiagnosticSeverity(diag)
+    print("clang diagnostic: " + diagStr)
+    if (diagSeverity > cppyy.gbl.CXDiagnostic_Warning):
+      print("clang diagnostic: " + diagStr)
+      raise Exception("Clang error: ")
+    cppyy.gbl.clang_disposeString(diagCXStr)
+    cppyy.gbl.clang_disposeDiagnostic(diag)
+  
+  mainFile = cppyy.gbl.clang_getFile(tu2, fullPath.encode("utf-8"))
+  def visit(cursor, parent, client_data):
+    location = cppyy.gbl.clang_getCursorLocation(cursor)
+    cppyy.gbl.clang_CXRewriter_insertTextBefore(cxrewriter, location, "/*hello*/")
+    filePtr = ctypes.c_void_p()
+    cppyy.gbl.clang_getExpansionLocation(location, filePtr, cppyy.nullptr, cppyy.nullptr, cppyy.nullptr)
+    file = ctypes.cast(filePtr, ctypes.POINTER(cppyy.gbl.CXFile))
+    if not cppyy.gbl.clang_File_isEqual(file, mainFile):
+      return cppyy.gbl.CXChildVisit_Continue
+    
+    print("Node type is ", cppyy.gbl.clang_getCursorKind(cursor))
+    return cppyy.gbl.CXChildVisit_Continue
+
+  cppyy.gbl.clang_visitChildren(cppyy.gbl.clang_getTranslationUnitCursor(tu2), visit, cppyy.nullptr)
+
+  cppyy.cppdef("""
+  void test(CXTranslationUnit tu) {
+    CXRewriter cxrewriter = clang_CXRewriter_create(tu);
+    clang_CXRewriter_writeMainFileToStdOut(cxrewriter);
+  }
+  """)
+  cppyy.gbl.test(tu2)
+
+  cxrewriter = cppyy.gbl.clang_CXRewriter_create(tu2)
+  cppyy.gbl.clang_CXRewriter_writeMainFileToStdOut(cxrewriter)
+
+  def printNode(node, indent=0):
+    print("  " * indent + node.kind.name + " " + node.spelling)
+    for child in node.get_children():
+      printNode(child, indent + 1)
+    
+  def processNode(node):
+    if not node.kind == clang.cindex.CursorKind.TRANSLATION_UNIT:
+      if not node.location.file or node.location.file.name != fullPath:
+        return
+    for child in node.get_children():
+      processNode(child)
+    # check if node is a call of printf
+    if node.kind == clang.cindex.CursorKind.CALL_EXPR:
+      if node.spelling == "printf":
+        # printNode(node)
+        argNodes = list(node.get_children())
+        printfArgs = [] 
+        for argNode in argNodes[1:]:
+          extent = argNode.extent
+          sourceStr = fileContents[extent.start.offset:extent.end.offset]
+          printfArgs.append(sourceStr)
+        print("found printf:", printfArgs)
+  processNode(tu.cursor)
+  # Now need map of [[start, end] -> replacement] as our transformation. C++ sourcemap implementation library:
+
+  cppyy.cppdef("""
+    std::string getRewriteBuffer2(CXRewriter rew) {
+      clang::Rewriter &rewriter = *(clang::Rewriter*)rew;
+      // get the rewritten buffer
+      std::string buffer;
+      llvm::raw_string_ostream os(buffer);
+      rewriter.getEditBuffer(rewriter.getSourceMgr().getMainFileID()).write(os);
+      return os.str();
+    }
+  """)
+  cppyy.gbl.getRewriteBuffer2(cxrewriter)
+
+  
+
   return fileContents
 def defineInNewNs(contents):
   global globalNsCount
@@ -42,11 +148,19 @@ def defineInNewNs(contents):
   return (nsName, getattr(cppyy.gbl, nsName))
 
 editorRuntimeDir = os.path.expanduser("~/MagicLeap2-Synced/SKTemplate-CMake/src")
+# editorRuntimeDir = "/Users/cameronfranz/Documents/Projects/Sunflower/SunflowerOS/Repo/Avatars/MagicLeap2-Synced/SKTemplate-CMake/src"
 cppyy.gbl.gInterpreter.Load("/data/data/com.termux/files/usr/lib/libzmq_testrename.so", True)
+# cppyy.load_library("libzmq.so")
 cppyy.cppdef("""
 #include <zmq.h>
 #include <math.h>
 """)
+
+testNsName, testNs = defineInNewNs(f"""
+#include "{os.path.join(editorRuntimeDir, "SunflowerEditorRuntime.cpp")}"
+""")
+# unload SunflowerEditorRuntime.cpp
+cppyy.gbl.gInterpreter.UnloadFile(os.path.join(editorRuntimeDir, "SunflowerEditorRuntime.cpp"))
 
 
 # TODO: segfaulting in zmq sometimes
@@ -55,8 +169,9 @@ editorRuntimeNs, editorRuntime = defineInNewNs(f"""
   {includeFile(editorRuntimeDir, "SunflowerEditorRuntime.cpp")}
 """)
 editorRuntime.msgserver_init()
-for i in range(1000):
+for i in range(10000):
   editorRuntime.msgserver_inthread_sendlog("test/main_hot.cpp", 10, 4, "hello world"+datetime.datetime.now().strftime("%H:%M:%S.%f"))
+  # time.sleep(0.001)
 editorRuntime.msgserver_close()
 
 
