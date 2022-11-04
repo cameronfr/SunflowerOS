@@ -8,7 +8,6 @@
 #include <thread>
 
 void *zmq_context;
-
 void *zmq_pub_sock; //sends data to VSCode
 void *zmq_gather_sock; //gathers from each thread's  sockets
 // map of thread id to its socket
@@ -56,10 +55,12 @@ void msgserver_inthread_send(const char* topic, const char* msg) {
   // printf("msgserver_inthread_send end: %ld", tid);
 }
 void msgserver_inthread_sendlog(char *filepath, int line, int lineChar, char *text) {
+  const static char *formatString = R"({"filepath":"%s","line":%d,"lineChar":%d,"text":"%s","timestamp":%ld})";
 
-  char *msg = (char*)malloc(strlen(filepath) + strlen(text) + (int)log10(line) + (int)log10(lineChar) + 20);
   long timestamp = std::time(0);
-  sprintf(msg, R"({"filepath":"%s","line":%d,"lineChar":%d,"text":"%s","timestamp":%ld})", filepath, line, lineChar, text, timestamp);
+  int bufSize = snprintf(NULL, 0, formatString, filepath, line, lineChar, text, timestamp);
+  char *msg = (char *)malloc(bufSize + 1);
+  snprintf(msg, bufSize + 1, formatString, filepath, line, lineChar, text, timestamp);
 
   msgserver_inthread_send("log", msg);
   free(msg);
@@ -100,7 +101,7 @@ const char* msgserver_init() {
     zmq_setsockopt(zmq_gather_sock, ZMQ_LINGER, &LINGER_ZERO, sizeof(LINGER_ZERO));
     zmq_close(zmq_pub_sock);
     zmq_close(zmq_gather_sock);
-    printf("Proxy thread finished closing sockets");
+    printf("Proxy thread finished closing sockets\n");
   });
 
   printf("Starting heartbeat thread\n");
@@ -133,12 +134,18 @@ void msgserver_close() {
   }
   zmq_sock_map.clear();
   zmq_mutex_map.clear();
-  printf("Waiting for proxy thread to end");
+  printf("Waiting for proxy thread to end\n");
   zmq_ctx_shutdown(zmq_context); 
   printf("Context shutdown");
   proxy_thread.join(); //zmq_proxy stops when context is terminated
-  printf("Proxy thread joined successfully");
+  printf("Proxy thread joined successfully\n");
   zmq_ctx_term(zmq_context);
   printf("Context terminated");
   zmq_context = NULL;
+}
+
+// ------------------------------
+
+void amIHere() {
+  printf("I'm here! %d %s\n", 23+12, "hello"  "1");
 }

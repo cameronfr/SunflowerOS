@@ -27,10 +27,6 @@ cppyy.gbl.gInterpreter.Load("/opt/homebrew/Cellar/llvm@14/14.0.6/lib/libLLVM.dyl
 cppyy.gbl.gInterpreter.Load("/opt/homebrew/Cellar/llvm@14/14.0.6/lib/libclang-cpp.dylib")
 cppyy.gbl.gInterpreter.Load("/opt/homebrew/Cellar/llvm@14/14.0.6/lib/libclang.dylib")
 cppyy.cppdef("""
-  #include "clang/Basic/SourceManager.h"
-  #include "clang/Frontend/ASTUnit.h"
-  #include "clang/Rewrite/Core/Rewriter.h"
-
   #include "clang-c/Index.h"
   #include "clang-c/Rewrite.h"
 """)
@@ -44,98 +40,6 @@ cppyy.cppdef("""
 """)
 
 globalNsCount = 1
-def includeFile(dir, path):
-  # fullPath = os.path.join(dir, path)
-
-  fullPath = "/Users/cameronfranz/Documents/Projects/Sunflower/SunflowerOS/Repo/Avatars/MagicLeap2-Synced/SKTemplate-CMake/src/SunflowerEditorRuntime.cpp" 
-  fileContents = open(fullPath, "r").read()
-  # Basically want output of cppyy.gbl.gInterpreter.ProcessLine(".I")
-  clangArgs = shlex.split(cppyy.gbl.gInterpreter.GetIncludePath()) + ["-resource-dir", cppyy.gbl.CppyyLegacy.GetROOT().GetEtcDir().Data() + "cling/lib/clang/9.0.1"]  
-  " ".join(clangArgs)
-  # index = clang.cindex.Index.create()
-  index2 = cppyy.gbl.clang_createIndex(0, 0)
-  # tu = index.parse(fullPath, args=clangArgs, unsaved_files=[(fullPath, fileContents)]) # parses from string, not file
-  tu2 = cppyy.gbl.clang_parseTranslationUnit(index2, fullPath.encode("utf-8"), clangArgs, len(clangArgs), cppyy.nullptr, 0, 0)
-  # tu = index.parse(fullPath, args=clangArgs)
-
-  for i in range(cppyy.gbl.clang_getNumDiagnostics(tu2)):
-    diag = cppyy.gbl.clang_getDiagnostic(tu2, i)
-    diagCXStr = cppyy.gbl.clang_formatDiagnostic(diag, cppyy.gbl.clang_defaultDiagnosticDisplayOptions())
-    diagStr = cppyy.gbl.clang_getCString(diagCXStr)
-    diagSeverity = cppyy.gbl.clang_getDiagnosticSeverity(diag)
-    print("clang diagnostic: " + diagStr)
-    if (diagSeverity > cppyy.gbl.CXDiagnostic_Warning):
-      print("clang diagnostic: " + diagStr)
-      raise Exception("Clang error: ")
-    cppyy.gbl.clang_disposeString(diagCXStr)
-    cppyy.gbl.clang_disposeDiagnostic(diag)
-  
-  mainFile = cppyy.gbl.clang_getFile(tu2, fullPath.encode("utf-8"))
-  def visit(cursor, parent, client_data):
-    location = cppyy.gbl.clang_getCursorLocation(cursor)
-    cppyy.gbl.clang_CXRewriter_insertTextBefore(cxrewriter, location, "/*hello*/")
-    filePtr = ctypes.c_void_p()
-    cppyy.gbl.clang_getExpansionLocation(location, filePtr, cppyy.nullptr, cppyy.nullptr, cppyy.nullptr)
-    file = ctypes.cast(filePtr, ctypes.POINTER(cppyy.gbl.CXFile))
-    if not cppyy.gbl.clang_File_isEqual(file, mainFile):
-      return cppyy.gbl.CXChildVisit_Continue
-    
-    print("Node type is ", cppyy.gbl.clang_getCursorKind(cursor))
-    return cppyy.gbl.CXChildVisit_Continue
-
-  cppyy.gbl.clang_visitChildren(cppyy.gbl.clang_getTranslationUnitCursor(tu2), visit, cppyy.nullptr)
-
-  cppyy.cppdef("""
-  void test(CXTranslationUnit tu) {
-    CXRewriter cxrewriter = clang_CXRewriter_create(tu);
-    clang_CXRewriter_writeMainFileToStdOut(cxrewriter);
-  }
-  """)
-  cppyy.gbl.test(tu2)
-
-  cxrewriter = cppyy.gbl.clang_CXRewriter_create(tu2)
-  cppyy.gbl.clang_CXRewriter_writeMainFileToStdOut(cxrewriter)
-
-  def printNode(node, indent=0):
-    print("  " * indent + node.kind.name + " " + node.spelling)
-    for child in node.get_children():
-      printNode(child, indent + 1)
-    
-  def processNode(node):
-    if not node.kind == clang.cindex.CursorKind.TRANSLATION_UNIT:
-      if not node.location.file or node.location.file.name != fullPath:
-        return
-    for child in node.get_children():
-      processNode(child)
-    # check if node is a call of printf
-    if node.kind == clang.cindex.CursorKind.CALL_EXPR:
-      if node.spelling == "printf":
-        # printNode(node)
-        argNodes = list(node.get_children())
-        printfArgs = [] 
-        for argNode in argNodes[1:]:
-          extent = argNode.extent
-          sourceStr = fileContents[extent.start.offset:extent.end.offset]
-          printfArgs.append(sourceStr)
-        print("found printf:", printfArgs)
-  processNode(tu.cursor)
-  # Now need map of [[start, end] -> replacement] as our transformation. C++ sourcemap implementation library:
-
-  cppyy.cppdef("""
-    std::string getRewriteBuffer2(CXRewriter rew) {
-      clang::Rewriter &rewriter = *(clang::Rewriter*)rew;
-      // get the rewritten buffer
-      std::string buffer;
-      llvm::raw_string_ostream os(buffer);
-      rewriter.getEditBuffer(rewriter.getSourceMgr().getMainFileID()).write(os);
-      return os.str();
-    }
-  """)
-  cppyy.gbl.getRewriteBuffer2(cxrewriter)
-
-  
-
-  return fileContents
 def defineInNewNs(contents):
   global globalNsCount
   globalNsCount += 1
@@ -146,6 +50,123 @@ def defineInNewNs(contents):
   }}
   """)
   return (nsName, getattr(cppyy.gbl, nsName))
+
+def includeFile(dir, path):
+  # TODO: def memory leaking on the cppyy clang stuff (need to free strings?)
+  clangNs = cppyy.gbl
+  # fullPath = os.path.join(dir, path)
+
+  fullPath = "/Users/cameronfranz/Documents/Projects/Sunflower/SunflowerOS/Repo/Avatars/MagicLeap2-Synced/SKTemplate-CMake/src/SunflowerEditorRuntime.cpp" 
+  fileContents = open(fullPath, "r").read()
+  # Basically want output of cppyy.gbl.gInterpreter.ProcessLine(".I")
+  clangArgs = shlex.split(cppyy.gbl.gInterpreter.GetIncludePath()) + ["-resource-dir", cppyy.gbl.CppyyLegacy.GetROOT().GetEtcDir().Data() + "cling/lib/clang/9.0.1"]  
+  index2 = clangNs.clang_createIndex(0, 0)
+  tu2 = clangNs.clang_parseTranslationUnit(index2, fullPath.encode("utf-8"), clangArgs, len(clangArgs), cppyy.nullptr, 0, 0)
+
+  def CXtoCStr(cxstr):
+    string = clangNs.clang_getCString(cxstr)
+    clangNs.clang_disposeString(cxstr)
+    return string
+
+  for i in range(clangNs.clang_getNumDiagnostics(tu2)):
+    diag = clangNs.clang_getDiagnostic(tu2, i)
+    diagStr = CXtoCStr(clangNs.clang_formatDiagnostic(diag, clangNs.clang_defaultDiagnosticDisplayOptions()))
+    diagSeverity = clangNs.clang_getDiagnosticSeverity(diag)
+    # print("clang diagnostic: " + diagStr)
+    if (diagSeverity > clangNs.CXDiagnostic_Warning):
+      print("clang diagnostic: " + diagStr)
+      raise Exception("Clang error: ")
+    clangNs.clang_disposeDiagnostic(diag)
+  
+  _, tmpNs = defineInNewNs("""
+    CXCursor* clang_makeCursorCopy(CXCursor* cursor) {
+      CXCursor* newCursor = new CXCursor();
+      *newCursor = *cursor;
+      return newCursor;
+    }
+  """)
+  def getCursorChildren(cursor):
+    children = []
+    def visit(c, p, l):
+      # clang_visitChildren reuses same CXCursor
+      cCopy = tmpNs.clang_makeCursorCopy(c)
+      children.append(cCopy)
+      return clangNs.CXChildVisit_Continue
+    clangNs.clang_visitChildren(cursor, visit, cppyy.nullptr)
+    return children
+  getCursorChildren(clangNs.clang_getTranslationUnitCursor(tu2))
+
+  cxrewriter = clangNs.clang_CXRewriter_create(tu2)
+  def visitor(cursor, depth):
+    location = clangNs.clang_getCursorLocation(cursor)
+    isFromMainFile = clangNs.clang_Location_isFromMainFile(location)
+    if not isFromMainFile:
+      return 
+    
+    clangNs.clang_Location_isFromMainFile
+    kind = clangNs.clang_getCursorKind(cursor)
+    spelling = CXtoCStr(clangNs.clang_getCursorSpelling(cursor))
+    kind = clangNs.clang_getCursorKind(cursor)
+    kindReadable = CXtoCStr(clangNs.clang_getCursorKindSpelling(kind))
+
+    line = ctypes.c_uint32()
+    column = ctypes.c_uint32()
+    clangNs.clang_getExpansionLocation(location, ctypes.c_void_p(), line, column, cppyy.nullptr)
+    extent = clangNs.clang_getCursorExtent(cursor)
+
+    # check if it's a printf
+    if kind == clangNs.CXCursor_CallExpr:
+      if spelling == "printf":
+        argStrings = []
+        # e.g. printf("hello %d", 5) -> ["printf", "\"hello %d\"", "5"]
+        for argCursor in getCursorChildren(cursor):
+          argExtent = clangNs.clang_getCursorExtent(argCursor)
+          start = clangNs.clang_getRangeStart(argExtent)
+          end = clangNs.clang_getRangeEnd(argExtent)
+          startIdx = ctypes.c_uint32()
+          endIdx = ctypes.c_uint32()
+          _file = ctypes.c_void_p()
+          clangNs.clang_getExpansionLocation(start, _file, cppyy.nullptr, cppyy.nullptr, startIdx)
+          clangNs.clang_getExpansionLocation(end, _file, cppyy.nullptr, cppyy.nullptr, endIdx)
+          extentStr = fileContents[startIdx.value:endIdx.value]
+          argStrings.append(extentStr) 
+          # print("extentStr: " + extentStr)
+    
+        vaArgs = ", ".join(argStrings[1:])
+        truncPath = "/".join(fullPath.split("/")[-3:])
+        newCode = f"""
+          {{
+            int sf_bufferSize = snprintf(NULL, 0, {vaArgs}); 
+            char *sf_buffer = (char*)malloc(sf_bufferSize + 1); 
+            snprintf(sf_buffer, sf_bufferSize + 1, {vaArgs}); 
+            msgserver_inthread_sendlog({truncPath}, {line.value}, {column.value}, sf_buffer); 
+            free(sf_buffer); 
+          }}
+        """
+        clangNs.clang_CXRewriter_replaceText(cxrewriter, extent, newCode)
+    for child in getCursorChildren(cursor):
+      visitor(child, depth+1)
+
+  for child in getCursorChildren(clangNs.clang_getTranslationUnitCursor(tu2)):
+    visitor(child, 0)
+
+  _, tmpNs = defineInNewNs("""
+    #include "clang/Basic/SourceManager.h"
+    #include "clang/Frontend/ASTUnit.h"
+    #include "clang/Rewrite/Core/Rewriter.h"
+    std::string getRewriteBuffer(CXRewriter rew) {
+      clang::Rewriter &rewriter = *(clang::Rewriter*)rew;
+      // get the rewritten buffer
+      std::string buffer;
+      llvm::raw_string_ostream os(buffer);
+      rewriter.getEditBuffer(rewriter.getSourceMgr().getMainFileID()).write(os);
+      return os.str();
+    }
+  """)
+  transformedFileContents = tmpNs.getRewriteBuffer(cxrewriter)
+  print(transformedFileContents)
+
+  return transformedFileContents
 
 editorRuntimeDir = os.path.expanduser("~/MagicLeap2-Synced/SKTemplate-CMake/src")
 # editorRuntimeDir = "/Users/cameronfranz/Documents/Projects/Sunflower/SunflowerOS/Repo/Avatars/MagicLeap2-Synced/SKTemplate-CMake/src"
