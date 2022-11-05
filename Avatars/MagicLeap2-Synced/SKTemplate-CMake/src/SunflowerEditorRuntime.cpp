@@ -2,7 +2,7 @@
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
-#include <ctime>
+#include <chrono>
 
 #include <map>
 #include <thread>
@@ -55,12 +55,12 @@ void msgserver_inthread_send(const char* topic, const char* msg) {
   // printf("msgserver_inthread_send end: %ld", tid);
 }
 void msgserver_inthread_sendlog(char *filepath, int line, int lineChar, char *text) {
-  const static char *formatString = R"({"filepath":"%s","line":%d,"lineChar":%d,"text":"%s","timestamp":%ld})";
+  const static char *formatString = R"({"filepath":"%s","line":%d,"lineChar":%d,"text":"%s","timestamp":%lld})";
 
-  long timestamp = std::time(0);
-  int bufSize = snprintf(NULL, 0, formatString, filepath, line, lineChar, text, timestamp);
+  const long long timestampMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+  int bufSize = snprintf(NULL, 0, formatString, filepath, line, lineChar, text, timestampMs);
   char *msg = (char *)malloc(bufSize + 1);
-  snprintf(msg, bufSize + 1, formatString, filepath, line, lineChar, text, timestamp);
+  snprintf(msg, bufSize + 1, formatString, filepath, line, lineChar, text, timestampMs);
 
   msgserver_inthread_send("log", msg);
   free(msg);

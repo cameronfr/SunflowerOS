@@ -9,8 +9,9 @@ var currentDecorations = {}
 
 // This obj instance is used as key for setDecorations -- if change every time, won't remove old 
 const decorationType = vscode.window.createTextEditorDecorationType({
-  backgroundColor: 'green',
-  border: '2px solid white',
+  // backgroundColor: 'green',
+  // border: '2px solid white',
+  isWholeLine: true, //puts decoration at end of line 
 })
 
 export function activate(context: vscode.ExtensionContext) {
@@ -35,7 +36,7 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   var onSockMessage = (topic, msg) => {
-    console.log(`Received message: [${topic}] ${msg}`)
+    // console.log(`Received message: [${topic}] ${msg}`)
     clearTimeout(sockTimeoutObj)
     sockTimeoutObj = setTimeout(recreateSocket, sockTimeout)
     if (topic == "heartbeat") {
@@ -60,18 +61,18 @@ export function activate(context: vscode.ExtensionContext) {
     }
   }, null, context.subscriptions);
 
-  // try {
-  //   parseMessage({
-  //     filepath: "/test/main_hot.cpp",
-  //     line: 10,
-  //     lineChar: 4,
-  //     text: "hello",
-  //     timestamp: new Date().getTime(),
-  //   })
-  //   drawDecorations(vscode.window.activeTextEditor)
-  // } catch (e) {
-  //   console.error(e.stack)
-  // }
+  try {
+    parseMessage({
+      filepath: "/test/main_hot.cpp",
+      line: 10,
+      lineChar: 2,
+      text: "hello",
+      timestamp: new Date().getTime(),
+    })
+    drawDecorations(vscode.window.activeTextEditor)
+  } catch (e) {
+    console.error(e.stack)
+  }
 }
 
 var drawDecorations = (editor: vscode.TextEditor) => {
@@ -87,8 +88,8 @@ var drawDecorations = (editor: vscode.TextEditor) => {
     }
   }
 
-  console.log("decorations len is " + decorations.length)
-  console.log("decorations is ", JSON.stringify(decorations))
+  // console.log("decorations len is " + decorations.length)
+  // console.log("decorations is ", JSON.stringify(decorations))
 
   editor.setDecorations(decorationType, decorations)
 }
@@ -98,18 +99,20 @@ var parseMessage = (msgJSON) => {
   const text = msgJSON.text
   const line = msgJSON.line
   const timestamp = msgJSON.timestamp
-  const lineChar = msgJSON.lineChar
+  const lineChar = msgJSON.lineChar //put at end of line
 
   const fileKey = filepath.split("/").pop()
   const posKey = line + ":" + lineChar
 
+  // TODO: don't recreate range until new compilation
   const range = new vscode.Range(
     new vscode.Position(line, lineChar), 
     new vscode.Position(line, lineChar)
   )
 
   // Time in form e.g. 5:45:30
-  let timeString = new Date(timestamp).toLocaleTimeString('en-US', { hour12: true, hour: "numeric", minute: "numeric", second: "numeric" })
+  let date = new Date(timestamp)
+  let timeString = date.toLocaleTimeString('en-US', { hour12: false, hour: "numeric", minute: "numeric", second: "numeric"}) + `.${date.getMilliseconds()}`;
   // https://github.com/microsoft/vscode/blob/6d2920473c6f13759c978dd89104c4270a83422d/src/vs/base/browser/markdownRenderer.ts#L296 //allowed tags and attribute and style string. Note style string sanitization is picky.
   let hoverMessage = new vscode.MarkdownString(`
     <strong><span style="color:#af005f;">Time</span>:</strong> ${timeString}
@@ -125,7 +128,8 @@ var parseMessage = (msgJSON) => {
       after: {
         contentText: text,
         color: "gray",
-      }
+        margin: "0 0 0 0.5em",
+      },
     },
   }
 
@@ -133,7 +137,7 @@ var parseMessage = (msgJSON) => {
     vscodeDecoration
   }
 
-  currentDecorations[fileKey] = currentDecorations[filepath] || {}
+  currentDecorations[fileKey] = currentDecorations[fileKey] || {}
   currentDecorations[fileKey][posKey] = decoration
 }
 

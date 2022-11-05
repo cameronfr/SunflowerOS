@@ -18,11 +18,14 @@ import json
 import datetime
 import time
 
+# import jupyter display
+from IPython.display import display, Javascript, HTML
+from html import escape
+
 # import clang.cindex
 import shlex
 import ctypes
 cppyy.add_include_path("/opt/homebrew/opt/llvm@14/include")
-# cppyy.gbl.gInterpreter.Load("/opt/homebrew/lib/python3.9/site-packages/clang/native/libclang.dylib")
 cppyy.gbl.gInterpreter.Load("/opt/homebrew/Cellar/llvm@14/14.0.6/lib/libLLVM.dylib")
 cppyy.gbl.gInterpreter.Load("/opt/homebrew/Cellar/llvm@14/14.0.6/lib/libclang-cpp.dylib")
 cppyy.gbl.gInterpreter.Load("/opt/homebrew/Cellar/llvm@14/14.0.6/lib/libclang.dylib")
@@ -31,13 +34,13 @@ cppyy.cppdef("""
   #include "clang-c/Rewrite.h"
 """)
 
-cppyy.cppdef("""
-#include <stdio.h>
-#include <stdlib.h>
-#include <android/log.h>
-// fake printf using android log
-#define printf(...) __android_log_print(ANDROID_LOG_INFO, "Sunflower cppyy", __VA_ARGS__)
-""")
+# cppyy.cppdef("""
+# #include <stdio.h>
+# #include <stdlib.h>
+# #include <android/log.h>
+# // fake printf using android log
+# #define printf(...) __android_log_print(ANDROID_LOG_INFO, "Sunflower cppyy", __VA_ARGS__)
+# """)
 
 globalNsCount = 1
 def defineInNewNs(contents):
@@ -51,12 +54,10 @@ def defineInNewNs(contents):
   """)
   return (nsName, getattr(cppyy.gbl, nsName))
 
-def includeFile(dir, path):
-  # TODO: def memory leaking on the cppyy clang stuff (need to free strings?)
+def includeFile(dir, path, runtimeNsName, transform=False):
   clangNs = cppyy.gbl
-  # fullPath = os.path.join(dir, path)
-
-  fullPath = "/Users/cameronfranz/Documents/Projects/Sunflower/SunflowerOS/Repo/Avatars/MagicLeap2-Synced/SKTemplate-CMake/src/SunflowerEditorRuntime.cpp" 
+  fullPath = os.path.join(dir, path)
+  # fullPath = "/Users/cameronfranz/Documents/Projects/Sunflower/SunflowerOS/Repo/Avatars/MagicLeap2-Synced/SKTemplate-CMake/src/SunflowerEditorRuntime.cpp" 
   fileContents = open(fullPath, "r").read()
   # Basically want output of cppyy.gbl.gInterpreter.ProcessLine(".I")
   clangArgs = shlex.split(cppyy.gbl.gInterpreter.GetIncludePath()) + ["-resource-dir", cppyy.gbl.CppyyLegacy.GetROOT().GetEtcDir().Data() + "cling/lib/clang/9.0.1"]  
@@ -78,7 +79,7 @@ def includeFile(dir, path):
       raise Exception("Clang error: ")
     clangNs.clang_disposeDiagnostic(diag)
   
-  _, tmpNs = defineInNewNs("""
+  _, tmp = defineInNewNs("""
     CXCursor* clang_makeCursorCopy(CXCursor* cursor) {
       CXCursor* newCursor = new CXCursor();
       *newCursor = *cursor;
@@ -89,7 +90,7 @@ def includeFile(dir, path):
     children = []
     def visit(c, p, l):
       # clang_visitChildren reuses same CXCursor
-      cCopy = tmpNs.clang_makeCursorCopy(c)
+      cCopy = tmp.clang_makeCursorCopy(c)
       children.append(cCopy)
       return clangNs.CXChildVisit_Continue
     clangNs.clang_visitChildren(cursor, visit, cppyy.nullptr)
@@ -139,7 +140,7 @@ def includeFile(dir, path):
             int sf_bufferSize = snprintf(NULL, 0, {vaArgs}); 
             char *sf_buffer = (char*)malloc(sf_bufferSize + 1); 
             snprintf(sf_buffer, sf_bufferSize + 1, {vaArgs}); 
-            msgserver_inthread_sendlog({truncPath}, {line.value}, {column.value}, sf_buffer); 
+            {runtimeNsName}::msgserver_inthread_sendlog("{truncPath}", {line.value-1}, {column.value-1}, sf_buffer); 
             free(sf_buffer); 
           }}
         """
@@ -147,13 +148,16 @@ def includeFile(dir, path):
     for child in getCursorChildren(cursor):
       visitor(child, depth+1)
 
-  for child in getCursorChildren(clangNs.clang_getTranslationUnitCursor(tu2)):
-    visitor(child, 0)
+  if transform:
+    for child in getCursorChildren(clangNs.clang_getTranslationUnitCursor(tu2)):
+      visitor(child, 0)
 
-  _, tmpNs = defineInNewNs("""
+  cppyy.cppdef("""
     #include "clang/Basic/SourceManager.h"
     #include "clang/Frontend/ASTUnit.h"
     #include "clang/Rewrite/Core/Rewriter.h"
+  """)
+  _, tmp = defineInNewNs("""
     std::string getRewriteBuffer(CXRewriter rew) {
       clang::Rewriter &rewriter = *(clang::Rewriter*)rew;
       // get the rewritten buffer
@@ -163,37 +167,47 @@ def includeFile(dir, path):
       return os.str();
     }
   """)
-  transformedFileContents = tmpNs.getRewriteBuffer(cxrewriter)
-  print(transformedFileContents)
+  transformedFileContents = tmp.getRewriteBuffer(cxrewriter)
+  # create jupyter scrollable output
+  display(HTML(f"""
+    <style>
+      .sf-code-output {{
+        max-height: 200px;
+        overflow-y: scroll;
+      }}
+    </style>
+    <div class="sf-code-output">
+      <pre>{escape(transformedFileContents)}</pre>
+    </div>
+  """))
+  # print(transformedFileContents)
 
   return transformedFileContents
 
-editorRuntimeDir = os.path.expanduser("~/MagicLeap2-Synced/SKTemplate-CMake/src")
-# editorRuntimeDir = "/Users/cameronfranz/Documents/Projects/Sunflower/SunflowerOS/Repo/Avatars/MagicLeap2-Synced/SKTemplate-CMake/src"
-cppyy.gbl.gInterpreter.Load("/data/data/com.termux/files/usr/lib/libzmq_testrename.so", True)
-# cppyy.load_library("libzmq.so")
+# editorRuntimeDir = os.path.expanduser("~/MagicLeap2-Synced/SKTemplate-CMake/src")
+editorRuntimeDir = "/Users/cameronfranz/Documents/Projects/Sunflower/SunflowerOS/Repo/Avatars/MagicLeap2-Synced/SKTemplate-CMake/src"
+# cppyy.gbl.gInterpreter.Load("/data/data/com.termux/files/usr/lib/libzmq_testrename.so", True)
+cppyy.load_library("libzmq.so")
 cppyy.cppdef("""
 #include <zmq.h>
 #include <math.h>
 """)
 
-testNsName, testNs = defineInNewNs(f"""
-#include "{os.path.join(editorRuntimeDir, "SunflowerEditorRuntime.cpp")}"
-""")
-# unload SunflowerEditorRuntime.cpp
-cppyy.gbl.gInterpreter.UnloadFile(os.path.join(editorRuntimeDir, "SunflowerEditorRuntime.cpp"))
-
-
 # TODO: segfaulting in zmq sometimes
 # __android_log_print calls seem to take about 5us each
-editorRuntimeNs, editorRuntime = defineInNewNs(f"""
-  {includeFile(editorRuntimeDir, "SunflowerEditorRuntime.cpp")}
+editorRuntimeNsName, editorRuntime = defineInNewNs(f"""
+  {includeFile(editorRuntimeDir, "SunflowerEditorRuntime.cpp", runtimeNsName=None, transform=False)}
 """)
 editorRuntime.msgserver_init()
-for i in range(10000):
+for i in range(1000):
   editorRuntime.msgserver_inthread_sendlog("test/main_hot.cpp", 10, 4, "hello world"+datetime.datetime.now().strftime("%H:%M:%S.%f"))
   # time.sleep(0.001)
 editorRuntime.msgserver_close()
+
+_, runtimeTest = defineInNewNs(f"""
+  {includeFile(editorRuntimeDir, "SunflowerEditorTesting.cpp", runtimeNsName=editorRuntimeNsName, transform=True)}
+""")
+runtimeTest.doStuff()
 
 
 # import cppyy.ll
