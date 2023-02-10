@@ -486,9 +486,8 @@ def midiEventsListToMidiFile(eventsList):
   eventsListCopy = copy.deepcopy(eventsList)
   for event in eventsListCopy:
     event[2] = 0 # keep everything on channel 1
-    # event[1] = int(event[1] * (150/120)) # scale the time
-    event[1] = int(event[1] * (180/120)) # scale the time
-    # event[1] = int(event[1] * (150/120)) # scale the time
+    event[1] = int(event[1] * (150/120)) # scale the time
+    # event[1] = int(event[1] * (180/120)) # scale the time
 
   opusFormat = [
     500, [
