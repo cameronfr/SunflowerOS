@@ -480,7 +480,7 @@ def noteListToMidiEventList(noteList):
     events.append([note['midi']['type'], timeSinceLastNoteTicks, 0, note['midi']['note'], note['midi']['velocity']])
   return events
 
-def midiEventsListToMidiFile(eventsList):
+def midiEventsListToMidiFile(eventsList, instrument=0):
   # OUTPUT of model is 500 ticks/quarter note, 120bpm. But input for this model seems to be 500 ticks/quarter note, 150bpm. Do the scaling here.
 
   eventsListCopy = copy.deepcopy(eventsList)
@@ -491,7 +491,7 @@ def midiEventsListToMidiFile(eventsList):
 
   opusFormat = [
     500, [
-      ["patch_change", 0, 0, 0], #piano on channel 0
+      ["patch_change", 0, 0, instrument], #piano on channel 0
       ["control_change", 0, 0, 64, 127], #tell model we're using sustain
       *eventsListCopy
     ]
@@ -505,8 +505,8 @@ notesBuffer = []
 midiEventsIn = noteListToMidiEventList(notesBuffer)
 userAndMachineMidiEvents.extend(midiEventsIn)
 notesBuffer = []
-midiFile = midiEventsListToMidiFile(userAndMachineMidiEvents)
-scoreEventsOut = doCompletion(midiFile, length=128, includePrimeInOutput=False, temperature=0.9)
+midiFile = midiEventsListToMidiFile(userAndMachineMidiEvents, instrument=0)
+scoreEventsOut = doCompletion(midiFile, length=128, includePrimeInOutput=False, temperature=1.0)
 midiEventsOut = TMIDIX.score2opus(score=[500, scoreEventsOut])[1]
 # userAndMachineMidiEvents.extend(midiEventsOut)
 await mainWebsocket.send(json.dumps(midiEventsOut))
