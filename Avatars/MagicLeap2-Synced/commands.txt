@@ -1,6 +1,8 @@
 adb connect 192.168.0.26:5555
 adb shell am start -n com.termux/.HomeActivity
+To enable remote->local port forwarding (i.e. remote binds to local port): need to vim $PREFIX/etc/ssh/sshd_config and add "GatewayPorts yes" to bottom of file.
 ssh -i ~/.ssh/google_compute_engine -L 8891:localhost:8888 -p 8022 192.168.0.26
+
 adb shell pm grant com.termux com.magicleap.permission.HEAD_POSE
 
 z SunflowerOS/Repo/Avatars

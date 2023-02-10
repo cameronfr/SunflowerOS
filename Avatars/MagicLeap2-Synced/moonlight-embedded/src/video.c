@@ -24,6 +24,12 @@
 #include <stdbool.h>
 #include <libyuv.h>
 
+// Want sort of UI here:
+// 1. Estimated rount-trip time
+// 2. Estimated decode time
+// 3. Time between decode and display on sk
+// 4. Ideally, also encoder time
+
 #define SLICES_PER_FRAME 1 //TODO: try adj this
 
 // define on_frame_received function pointer
@@ -99,7 +105,7 @@ static int setup(int videoFormat, int width, int height, int redrawRate, void* c
   //  "omx.mesa.video_decoder.avc": 6%
   // "omx.google.h264.decoder": 7%
   // in comparison yuv->rgb with libyuv uses ~10% cpu
-  
+
   // also don't notice latency difference between these two. 
   jclass media_codec = env->FindClass("android/media/MediaCodec");
   jmethodID create_by_codec_name = env->GetStaticMethodID(media_codec, "createByCodecName", "(Ljava/lang/String;)Landroid/media/MediaCodec;");

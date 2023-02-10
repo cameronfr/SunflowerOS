@@ -7,6 +7,7 @@ void doStuff() {
   int x = 5;
 }
 
+
 void doStuff2() {
   int r = rand();
   printf("Hello world %d", r);

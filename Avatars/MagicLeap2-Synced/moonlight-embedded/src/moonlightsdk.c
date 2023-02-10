@@ -148,10 +148,10 @@ extern bool moon_init_config(char *address, char *app) {
   // Sets to default values, also sets a key dir.
   config_parse(0, NULL, &config);
   config.address = address;
-  // config.stream.width = 1920;
-  // config.stream.height = 1080;
   config.stream.width = 2560;
   config.stream.height = 1600;
+  // config.stream.width = 1280;
+  // config.stream.height = 800;
   config.app = app;
   // config.address = "192.168.0.4";
   return true;
@@ -202,6 +202,7 @@ extern bool moon_pair_server() {
     return true;
   }
 }
+
 
 void onFrame(uint8_t *data, int width, int height) {
   // for testing

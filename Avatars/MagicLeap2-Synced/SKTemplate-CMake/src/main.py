@@ -208,6 +208,8 @@ _, runtimeTest = defineInNewNs(f"""
   {includeFile(editorRuntimeDir, "SunflowerEditorTesting.cpp", runtimeNsName=editorRuntimeNsName, transform=True)}
 """)
 runtimeTest.doStuff()
+for i in range(100):
+  runtimeTest.doStuff2()
 
 
 # import cppyy.ll

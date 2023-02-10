@@ -85,7 +85,8 @@ async def getCompletionOAI(*args, **kwargs):
 	# kwargs = {"prompt": "testing123"}
 	defaultArgs = dict(
 	#   engine="text-davinci-002",
-	  model="text-davinci-002",
+	  # model="text-davinci-002",
+	  model="text-davinci-003",
 	  temperature=0.7,
 	  max_tokens=60,
 	  top_p=1,
@@ -378,11 +379,11 @@ async def processMessages(msgHistory):
 	author1 = msgHistory[0]["author"]
 	replier1 = msgHistory[-1]["author"]
 	msg = msgHistory[-1]
-	# for i in range(3):
-	# 	msg["authorFeelingsGPTv4_"+str(i)] = {
-	# 		author1: await predictFeelingGPTv4(msgHistory, author1, replier1), 
-	# 		replier1: await predictFeelingGPTv4(msgHistory, replier1, author1)
-	# 	} 
+	for i in range(3):
+		msg["authorFeelingsGPTv4_"+str(i)] = {
+			author1: await predictFeelingGPTv4(msgHistory, author1, replier1), 
+			replier1: await predictFeelingGPTv4(msgHistory, replier1, author1)
+		} 
 	msg["authorFeelingsGPTv5"] = {author1: await predictFeelingGPTv5(msgHistory, author1), replier1: await predictFeelingGPTv5(msgHistory, replier1)}
 	msg["authorFeelingsGPTv5Var2"] = {author1: await predictFeelingGPTv5Var2(msgHistory, author1), replier1: await predictFeelingGPTv5Var2(msgHistory, replier1)}
 
@@ -532,8 +533,8 @@ async def testExchange(inlines):
 		msg = {"untransformedMsg": msgTxt, "author": ctx.author}
 		msgHistory.append(msg)
 	await processMessages(msgHistory)
-	# debugViewMsgHistory(msgHistory, ["authorFeelingsGPTv5", "authorFeelingsGPTv4_0", "authorFeelingsGPTv4_1", "authorFeelingsGPTv4_2", ""])
-	debugViewMsgHistory(msgHistory, ["authorFeelingsGPTv5", "authorFeelingsGPTv5Var2"])
+	debugViewMsgHistory(msgHistory, ["authorFeelingsGPTv5", "authorFeelingsGPTv4_0", "authorFeelingsGPTv4_1", "authorFeelingsGPTv4_2", ""])
+	# debugViewMsgHistory(msgHistory, ["authorFeelingsGPTv5", "authorFeelingsGPTv5Var2"])
 
 #%%#
 
