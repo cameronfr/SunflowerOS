@@ -156,11 +156,11 @@ task = asyncio.ensure_future(server.start_serving())
 
 # server.close()
 
-def doCompletion(midiFileBytes, length=128, includePrimeInOutput=False, temperature=0.8):
-
+def doCompletion(midiFileBytes, length=128, includePrimeInOutput=False, temperature=0.8, primeLength=256):
 
   # Processing (from around cell 2)
-  score = TMIDIX.midi2ms_score(midiFileBytes)
+  # score = TMIDIX.midi2ms_score(midiFileBytes)
+  score = TMIDIX.midi2score(midiFileBytes)
   events_matrix = []
   melody_chords_f = []
   melody_chords_f1 = []
@@ -344,7 +344,7 @@ def doCompletion(midiFileBytes, length=128, includePrimeInOutput=False, temperat
                                                             number_of_ticks_per_quarter=500)
 
   # Inference (from around cell 3)
-  number_of_prime_tokens = 256#@param {type:"slider", min:4, max:3072, step:4}
+  number_of_prime_tokens = primeLength#@param {type:"slider", min:4, max:3072, step:4}
   number_of_tokens_to_generate = length#@param {type:"slider", min:32, max:4096, step:32}
   number_of_batches_to_generate = 1 #@param {type:"slider", min:1, max:16, step:1}
   include_prime_tokens_in_generated_output = includePrimeInOutput#@param {type:"boolean"}
@@ -486,8 +486,8 @@ def midiEventsListToMidiFile(eventsList, instrument=0):
   eventsListCopy = copy.deepcopy(eventsList)
   for event in eventsListCopy:
     event[2] = 0 # keep everything on channel 1
-    event[1] = int(event[1] * (150/120)) # scale the time
-    # event[1] = int(event[1] * (180/120)) # scale the time
+    # event[1] = int(event[1] * (150/120)) # scale the time
+    event[1] = int(event[1] * (120/120))
 
   opusFormat = [
     500, [
@@ -506,7 +506,8 @@ midiEventsIn = noteListToMidiEventList(notesBuffer)
 userAndMachineMidiEvents.extend(midiEventsIn)
 notesBuffer = []
 midiFile = midiEventsListToMidiFile(userAndMachineMidiEvents, instrument=0)
-scoreEventsOut = doCompletion(midiFile, length=128, includePrimeInOutput=False, temperature=1.0)
+scoreEventsOut = doCompletion(midiFile, length=128, includePrimeInOutput=False, temperature=1.0, primeLength=1024)
+# todo: show priming (without playing it again). so can repeat and see if model will repeat it for us
 midiEventsOut = TMIDIX.score2opus(score=[500, scoreEventsOut])[1]
 # userAndMachineMidiEvents.extend(midiEventsOut)
 await mainWebsocket.send(json.dumps(midiEventsOut))
