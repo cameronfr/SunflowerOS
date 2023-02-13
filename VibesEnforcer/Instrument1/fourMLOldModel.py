@@ -705,13 +705,14 @@ async def handler(websocket, path):
 server = await websockets.serve(handler, "0.0.0.0", 8889, ping_timeout=None)
 task = asyncio.ensure_future(server.start_serving())
 
-server.close()
+# server.close()
 
 def doCompletion(midiFileBytes, length=128, includePrimeInOutput=False, temperature=0.8, primeLength=256):
 
 
   # Processing (from around cell 2)
-  score = TMIDIX.midi2ms_score(midiFileBytes)
+  score = TMIDIX.midi2score(midiFileBytes)
+  # score = TMIDIX.midi2ms_score(midiFileBytes)
   events_matrix = []
   melody_chords_f = []
   melody_chords_f1 = []
@@ -1027,22 +1028,22 @@ def noteListToMidiEventList(noteList):
     timeSinceLastNoteSeconds = note['time'] - noteList[noteList.index(note) - 1]['time'] if noteList.index(note) > 0 else 0
     timeSinceLastNoteTicks = int(timeSinceLastNoteSeconds * 500 * (120/60))
     # 1 is the channel. keep it fixed for now
-    events.append([note['midi']['type'], timeSinceLastNoteTicks, 0, note['midi']['note'], note['midi']['velocity']])
+    events.append([note['midi']['type'], timeSinceLastNoteTicks, note['midi']["channel"], note['midi']['note'], note['midi']['velocity']])
   return events
 
-def midiEventsListToMidiFile(eventsList, instrument=0):
+def midiEventsListToMidiFile(eventsList, instrument0=0, instrument1=42):
   # OUTPUT of model is 500 ticks/quarter note, 120bpm. But input for this model seems to be 500 ticks/quarter note, 150bpm. Do the scaling here.
 
   eventsListCopy = copy.deepcopy(eventsList)
   for event in eventsListCopy:
-    event[2] = 0 # keep everything on channel 1
-    # event[1] = int(event[1] * (150/120)) # scale the time
-    event[1] = int(event[1] * (180/120)) # scale the time
-    # event[1] = int(event[1] * (150/120)) # scale the time
+    # event[1] = int(event[1] * (180/120)) # scale the time
+    event[1] = int(event[1] * (120/120)) # scale the time
+    # event[1] = int(event[1] * (240/120)) # scale the time
 
   opusFormat = [
     500, [
-      ["patch_change", 0, 0, instrument], #piano on channel 0
+      ["patch_change", 0, 0, instrument0], #piano(0) on channel 0
+      ["patch_change", 0, 1, instrument1], #cello(42) on channel 1
       ["control_change", 0, 0, 64, 127], #tell model we're using sustain
       *eventsListCopy
     ]
@@ -1056,8 +1057,8 @@ notesBuffer = []
 midiEventsIn = noteListToMidiEventList(notesBuffer)
 userAndMachineMidiEvents.extend(midiEventsIn)
 notesBuffer = []
-midiFile = midiEventsListToMidiFile(userAndMachineMidiEvents, instrument=16)
-scoreEventsOut = doCompletion(midiFile, length=64, includePrimeInOutput=False, temperature=0.9, primeLength=256)
+midiFile = midiEventsListToMidiFile(userAndMachineMidiEvents, instrument0=0, instrument1=42) #piano + cello
+scoreEventsOut = doCompletion(midiFile, length=128, includePrimeInOutput=False, temperature=0.9, primeLength=256)
 midiEventsOut = TMIDIX.score2opus(score=[500, scoreEventsOut])[1]
 # userAndMachineMidiEvents.extend(midiEventsOut)
 await mainWebsocket.send(json.dumps(midiEventsOut))

@@ -62,9 +62,9 @@ print('=' * 70)
 %cd ~/
 print('=' * 70)
 print('Unzipping pre-trained Los Angeles Music Composer model...Please wait...')
-!cat ./Los-Angeles-Music-Composer/Model/Los_Angeles_Music_Composer_Trained_Model.zip* > ./Los-Angeles-Music-Composer/Model/Los_Angeles_Music_Composer_Trained_Model.zip
+# !cat ./Los-Angeles-Music-Composer/Model/Los_Angeles_Music_Composer_Trained_Model.zip* > ./Los-Angeles-Music-Composer/Model/Los_Angeles_Music_Composer_Trained_Model.zip
 print('=' * 70)
-!unzip -j ./Los-Angeles-Music-Composer/Model/Los_Angeles_Music_Composer_Trained_Model.zip
+# !unzip -j ./Los-Angeles-Music-Composer/Model/Los_Angeles_Music_Composer_Trained_Model.zip
 %cd ~/
 
 
@@ -338,7 +338,7 @@ def doCompletion(midiFileBytes, length=128, includePrimeInOutput=False, temperat
 
       detailed_stats = TMIDIX.Tegridy_SONG_to_MIDI_Converter(song_f,
                                                             output_signature = 'Los Angeles Music Composer',  
-                                                            output_file_name = './Los-Angeles-Music-Composer-Seed-Composition',
+                                                            output_file_name = './Los-Angeles-Music-Composer-Seed-Composition-Mid-Out',
                                                             track_name='Project Los Angeles',
                                                             list_of_MIDI_patches=[0, 24, 32, 40, 42, 46, 56, 71, 73, 0, 53, 19, 0, 0, 0, 0],
                                                             number_of_ticks_per_quarter=500)
@@ -477,22 +477,21 @@ def noteListToMidiEventList(noteList):
     timeSinceLastNoteSeconds = note['time'] - noteList[noteList.index(note) - 1]['time'] if noteList.index(note) > 0 else 0
     timeSinceLastNoteTicks = int(timeSinceLastNoteSeconds * 500 * (120/60))
     # 1 is the channel. keep it fixed for now
-    events.append([note['midi']['type'], timeSinceLastNoteTicks, 0, note['midi']['note'], note['midi']['velocity']])
+    events.append([note['midi']['type'], timeSinceLastNoteTicks, note['midi']["channel"], note['midi']['note'], note['midi']['velocity']])
   return events
 
-def midiEventsListToMidiFile(eventsList, instrument=0):
+def midiEventsListToMidiFile(eventsList, instrument0=0, instrument1=42):
   # OUTPUT of model is 500 ticks/quarter note, 120bpm. But input for this model seems to be 500 ticks/quarter note, 150bpm. Do the scaling here.
 
   eventsListCopy = copy.deepcopy(eventsList)
   for event in eventsListCopy:
-    event[2] = 0 # keep everything on channel 1
-    # event[1] = int(event[1] * (150/120)) # scale the time
     event[1] = int(event[1] * (120/120))
 
   opusFormat = [
     500, [
-      ["patch_change", 0, 0, instrument], #piano on channel 0
-      ["control_change", 0, 0, 64, 127], #tell model we're using sustain
+      ["patch_change", 0, 0, instrument0], #piano on channel 0
+      ["patch_change", 0, 1, instrument1], #cello(42) on channel 1
+      # ["control_change", 0, 0, 64, 127], #tell model we're using sustain
       *eventsListCopy
     ]
   ]
@@ -505,8 +504,8 @@ notesBuffer = []
 midiEventsIn = noteListToMidiEventList(notesBuffer)
 userAndMachineMidiEvents.extend(midiEventsIn)
 notesBuffer = []
-midiFile = midiEventsListToMidiFile(userAndMachineMidiEvents, instrument=0)
-scoreEventsOut = doCompletion(midiFile, length=128, includePrimeInOutput=False, temperature=1.0, primeLength=1024)
+midiFile = midiEventsListToMidiFile(userAndMachineMidiEvents, instrument0=0, instrument1=42)
+scoreEventsOut = doCompletion(midiFile, length=128, includePrimeInOutput=False, temperature=1.0, primeLength=256)
 # todo: show priming (without playing it again). so can repeat and see if model will repeat it for us
 midiEventsOut = TMIDIX.score2opus(score=[500, scoreEventsOut])[1]
 # userAndMachineMidiEvents.extend(midiEventsOut)

@@ -10,8 +10,8 @@ from collections import deque
 print(mido.get_input_names())
 print(mido.get_output_names())
 
-deviceName = "LUMI Keys BLOCK"
-inport = mido.open_input("LUMI Keys BLOCK")
+inport0 = mido.open_input("LUMI Keys BLOCK")
+inport1 = mido.open_input("Arturia MiniLab mkII")
 outportForAudio = mido.open_output("IAC Driver Bus 1")
 outportForDiplay = mido.open_output("LUMI Keys BLOCK")
 
@@ -27,12 +27,24 @@ outportForDiplay.send(msg)
 # ws.connect("ws://desktop-3vakahr:8889")
 ws = await websockets.connect("ws://desktop-3vakahr:8889")
 
+
 #Rewritten for new version of mido
 while True:
-  msg = inport.poll()
+  # Send instrument 0 on channel 0 and instrument 1 on channel 1
+  msg = None
+  channel = None
+  msg = inport0.poll()
+  if msg:
+    channel = 0
+  else:
+    msg = inport1.poll()
+    if msg:
+      channel = 1
+
   if msg and msg.type in ["note_on", "note_off", "control_change"]:
+    print(msg, channel)
     fullMessage = {
-      "midi": {"type": msg.type, "note": msg.note, "velocity": msg.velocity, "channel": msg.channel},
+      "midi": {"type": msg.type, "note": msg.note, "velocity": msg.velocity, "channel": channel},
       "time": time.time(),
     }
     await ws.send(json.dumps(fullMessage))
