@@ -508,8 +508,13 @@ midiFile = midiEventsListToMidiFile(userAndMachineMidiEvents, instrument0=0, ins
 scoreEventsOut = doCompletion(midiFile, length=128, includePrimeInOutput=False, temperature=1.0, primeLength=256)
 # todo: show priming (without playing it again). so can repeat and see if model will repeat it for us
 midiEventsOut = TMIDIX.score2opus(score=[500, scoreEventsOut])[1]
+midiEventsOutProcessed = []
+for event in midiEventsOut:
+   chanMap = {4: 1, 3:1} # channel 4 out is 42, which we gave on ch 1, so give it back on ch 1. Also map violins to ch1
+   newEvent = [event[0], event[1], chanMap.get(event[2], event[2]), event[3], event[4]]
+   midiEventsOutProcessed.append(newEvent)
 # userAndMachineMidiEvents.extend(midiEventsOut)
-await mainWebsocket.send(json.dumps(midiEventsOut))
+await mainWebsocket.send(json.dumps(midiEventsOutProcessed))
 
 #  asked it a musical question, spammed it until it answered (it kept trying to stop), result was great
 # this is using checkpoint step 66010, @asigalov61's repo on Feb 7th

@@ -128,15 +128,16 @@ plt.savefig("./Los-Angeles-Music-Composer-Tokens-Embeddings-Plot.png", bbox_inch
 
 
 #%%#
-
 #@title Load Seed MIDI
 select_seed_MIDI = "Los-Angeles-Music-Composer-Piano-Seed-1" #@param ["Los-Angeles-Music-Composer-Piano-Seed-1", "Los-Angeles-Music-Composer-Piano-Seed-2", "Los-Angeles-Music-Composer-Piano-Seed-3", "Los-Angeles-Music-Composer-Piano-Seed-4", "Los-Angeles-Music-Composer-Piano-Seed-5", "Los-Angeles-Music-Composer-MI-Seed-1", "Los-Angeles-Music-Composer-MI-Seed-2", "Los-Angeles-Music-Composer-MI-Seed-3", "Los-Angeles-Music-Composer-MI-Seed-4", "Los-Angeles-Music-Composer-MI-Seed-5"]
 # full_path_to_custom_seed_MIDI = "" #@param {type:"string"}
 full_path_to_custom_seed_MIDI = "/home/cameronfranz/kgSongCC0.mid" #@param {type:"string"}
+full_path_to_custom_seed_MIDI = "/home/cameronfranz/SampleTrainMidi/c0a3d95afbac4e142733640241920021.mid" # strings messed up
+full_path_to_custom_seed_MIDI = "/home/cameronfranz/SampleTrainMidi/c0a1dc35831f56b8bb1f46d08c85eecf.mid" # 
 
 if full_path_to_custom_seed_MIDI == '':
   f = './Los-Angeles-Music-Composer/Seeds/'+select_seed_MIDI+'.mid'
-
+# strings 
 else:
   f = full_path_to_custom_seed_MIDI
 
@@ -169,6 +170,7 @@ patch_map = [[0, 1, 2, 3, 4, 5, 6, 7], # Piano
           [32, 33, 34, 35, 36, 37, 38, 39], # Bass
           [40, 41], # Violin
           [42, 43], # Cello
+          # [42, 43, 48], # ADD STRINGS
           [46], # Harp
           [56, 57, 58, 59, 60], # Trumpet
           [71, 72], # Clarinet
@@ -190,6 +192,7 @@ events_matrix1 = []
 
 for event in events_matrix:
   if event[0] == 'patch_change':
+      print(event)
       patches[event[2]] = event[3]
 
   if event[0] == 'note':
@@ -371,17 +374,15 @@ for s in song_f:
   y.append(s[4])
   c.append(colors[s[3]])
 
-# FluidSynth("/usr/share/sounds/sf2/FluidR3_GM.sf2", 16000).midi_to_audio(str(fname + '.mid'), str(fname + '.wav'))
-# display(Audio(str(fname + '.wav'), rate=16000))
-
-# plt.figure(figsize=(14,5))
-# ax=plt.axes(title=fname)
-# ax.set_facecolor('black')
-
-# plt.scatter(x,y, c=c)
-# plt.xlabel("Time")
-# plt.ylabel("Pitch")
-# plt.show()
+FluidSynth("/usr/share/sounds/sf2/FluidR3_GM.sf2", 16000).midi_to_audio(str(fname + '.mid'), str(fname + '.wav'))
+display(Audio(str(fname + '.wav'), rate=16000))
+plt.figure(figsize=(14,5))
+ax=plt.axes(title=fname)
+ax.set_facecolor('black')
+plt.scatter(x,y, c=c)
+plt.xlabel("Time")
+plt.ylabel("Pitch")
+plt.show()
 
 # %%
 
@@ -707,7 +708,7 @@ task = asyncio.ensure_future(server.start_serving())
 
 # server.close()
 
-def doCompletion(midiFileBytes, length=128, includePrimeInOutput=False, temperature=0.8, primeLength=256):
+def doCompletion(midiFileBytes, length=128, includePrimeInOutput=False, temperature=0.8, primeLength=256, allowStop=True):
 
 
   # Processing (from around cell 2)
@@ -797,9 +798,10 @@ def doCompletion(midiFileBytes, length=128, includePrimeInOutput=False, temperat
 
         pe = e
 
-    if len([y for y in melody_chords if y[2] != 9]) > 12: # Filtering out tiny/bad MIDIs...
+    if True or len([y for y in melody_chords if y[2] != 9]) > 12: # Filtering out tiny/bad MIDIs...
 
-      times = [y[0] for y in melody_chords[12:]]
+      # times = [y[0] for y in melody_chords[12:]]
+      times = [y[0] for y in melody_chords[:]]
       avg_time = sum(times) / len(times)
 
       times_list = list(set(times))
@@ -899,7 +901,7 @@ def doCompletion(midiFileBytes, length=128, includePrimeInOutput=False, temperat
   number_of_tokens_to_generate = length#@param {type:"slider", min:32, max:4096, step:32}
   number_of_batches_to_generate = 1 #@param {type:"slider", min:1, max:16, step:1}
   include_prime_tokens_in_generated_output = includePrimeInOutput#@param {type:"boolean"}
-  allow_model_to_stop_generation_if_needed =  True#@param {type:"boolean"}
+  allow_model_to_stop_generation_if_needed = allowStop#@param {type:"boolean"}
   temperature = temperature #@param {type:"slider", min:0.1, max:1, step:0.1}
   if allow_model_to_stop_generation_if_needed:
     min_stop_token = 2816
@@ -1010,7 +1012,7 @@ def doCompletion(midiFileBytes, length=128, includePrimeInOutput=False, temperat
         # color black keys slightly darker
         for i in range(128):
           if i % 12 in [1, 3, 6, 8, 10]:
-            plt.axhline(y=i, color='gray', alpha=0.3, linewidth=2)
+            plt.axhline(y=i, color='gray', alpha=0.3, linewidth=4)
 
         plt.scatter(x,y, c=c)
         plt.xlabel("Time")
@@ -1031,7 +1033,7 @@ def noteListToMidiEventList(noteList):
     events.append([note['midi']['type'], timeSinceLastNoteTicks, note['midi']["channel"], note['midi']['note'], note['midi']['velocity']])
   return events
 
-def midiEventsListToMidiFile(eventsList, instrument0=0, instrument1=42):
+def midiEventsListToMidiFile(eventsList, instrumentsByChannel=[0]):
   # OUTPUT of model is 500 ticks/quarter note, 120bpm. But input for this model seems to be 500 ticks/quarter note, 150bpm. Do the scaling here.
 
   eventsListCopy = copy.deepcopy(eventsList)
@@ -1042,29 +1044,36 @@ def midiEventsListToMidiFile(eventsList, instrument0=0, instrument1=42):
 
   opusFormat = [
     500, [
-      ["patch_change", 0, 0, instrument0], #piano(0) on channel 0
-      ["patch_change", 0, 1, instrument1], #cello(42) on channel 1
+      *[["patch_change", 0, i, instrument] for i, instrument in enumerate(instrumentsByChannel)],
       ["control_change", 0, 0, 64, 127], #tell model we're using sustain
       *eventsListCopy
     ]
   ]
+  # print(opusFormat)
   midiFileBytes = TMIDIX.opus2midi(opusFormat)
   return midiFileBytes
 
 userAndMachineMidiEvents = []
 notesBuffer = []
 
+# myContext = userAndMachineMidiEvents.copy()
+# userAndMachineMidiEvents = myContext + noteListToMidiEventList(notesBuffer)
+# notesBuffer = []
+
 midiEventsIn = noteListToMidiEventList(notesBuffer)
 userAndMachineMidiEvents.extend(midiEventsIn)
+# userAndMachineMidiEvents = (midiEventsIn) # only use buffer as context
 notesBuffer = []
-midiFile = midiEventsListToMidiFile(userAndMachineMidiEvents, instrument0=0, instrument1=42) #piano + cello
-scoreEventsOut = doCompletion(midiFile, length=128, includePrimeInOutput=False, temperature=0.9, primeLength=256)
+
+midiFile = midiEventsListToMidiFile(userAndMachineMidiEvents, [0, 40]) #piano + electric guitar (piano is 0, overdriven guitar is 28, organ is 16, cello is 42, harp is 46)
+scoreEventsOut = doCompletion(midiFile, length=128, includePrimeInOutput=True, temperature=0.6, primeLength=1024, allowStop=True)
+# scoreEventsOut = doCompletion(midiFile, length=64, includePrimeInOutput=False, temperature=0.9, primeLength=256)
 midiEventsOut = TMIDIX.score2opus(score=[500, scoreEventsOut])[1]
+midiEventsOutProcessed = []
+for event in midiEventsOut:
+   chanMap = {4: 1, 3:1} # channel 4 out is 42, which we gave on ch 1, so give it back on ch 1. Also map violins to ch1
+   newEvent = [event[0], event[1], chanMap.get(event[2], event[2]), event[3], event[4]]
+   midiEventsOutProcessed.append(newEvent)
 # userAndMachineMidiEvents.extend(midiEventsOut)
-await mainWebsocket.send(json.dumps(midiEventsOut))
-
-#  asked it a musical question, spammed it until it answered (it kept trying to stop), result was great
-# this is using checkpoint step 66010, @asigalov61's repo on Feb 7th
-
-
-
+# await mainWebsocket.send(json.dumps(midiEventsOutProcessed[44:]))
+await mainWebsocket.send(json.dumps(midiEventsOutProcessed))

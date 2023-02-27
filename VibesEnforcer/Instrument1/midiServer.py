@@ -1,4 +1,5 @@
 import mido
+# Enable "Midi 2.0" in Logic Pro X settings to stop it sending weird incorrect messages (e.g. it says its sending Sysex but sends a note_on message instead). Can also go to the Midi Input Filter in Project Settings and disable Sysex messages.
 import json
 import time
 import asyncio
@@ -10,17 +11,17 @@ from collections import deque
 print(mido.get_input_names())
 print(mido.get_output_names())
 
-inport0 = mido.open_input("LUMI Keys BLOCK")
-inport1 = mido.open_input("Arturia MiniLab mkII")
-outportForAudio = mido.open_output("IAC Driver Bus 1")
-outportForDiplay = mido.open_output("LUMI Keys BLOCK")
+# inport0 = mido.open_input("LUMI Keys BLOCK")
+# inport1 = mido.open_input("Arturia MiniLab mkII")
+inport0 = mido.open_input("IAC Driver Bus 1")
+outport0 = mido.open_output("IAC Driver Bus 2")
+# Can use Logic's "External Midi" tracks to deal with forwarding instrument input and output
 
 msglog = deque()
-echo_delay = 0.1
+msglog.clear()
 
 msg = mido.Message('note_on', note=60, velocity=64, time=0)
-outportForAudio.send(msg)
-outportForDiplay.send(msg)
+outport0.send(msg)
 
 # connect to websocket at desktop-3vakahr:8765
 # ws = websocket.WebSocket()
@@ -28,25 +29,18 @@ outportForDiplay.send(msg)
 ws = await websockets.connect("ws://desktop-3vakahr:8889")
 
 
+print("Start")
 #Rewritten for new version of mido
 while True:
-  # Send instrument 0 on channel 0 and instrument 1 on channel 1
   msg = None
-  channel = None
   msg = inport0.poll()
-  if msg:
-    channel = 0
-  else:
-    msg = inport1.poll()
-    if msg:
-      channel = 1
 
-  if msg and msg.type in ["note_on", "note_off", "control_change"]:
-    print(msg, channel)
+  if msg and msg.type in ["note_on", "note_off"]:
     fullMessage = {
-      "midi": {"type": msg.type, "note": msg.note, "velocity": msg.velocity, "channel": channel},
+      "midi": {"type": msg.type, "note": msg.note, "velocity": msg.velocity, "channel": msg.channel},
       "time": time.time(),
     }
+    print(time.time(),msg)
     await ws.send(json.dumps(fullMessage))
 
   # check if incoming ws message
@@ -64,11 +58,9 @@ while True:
       dueTime = curTime + (note[1] / ticksPerSecond)
       msglog.append({"msg": midoNote, "due": dueTime})
       curTime = dueTime
-    # msglog.append({"msg": msg, "due": time.time() + echo_delay})
   while len(msglog) > 0 and msglog[0]["due"] <= time.time():
     msg = msglog.popleft()["msg"]
-    outportForDiplay.send(msg)
-    outportForAudio.send(msg)
+    outport0.send(msg)
 
 
 
