@@ -46,7 +46,7 @@ while True:
   # check if incoming ws message
   wsMessage = None
   try:
-    wsMessage = await asyncio.wait_for(ws.recv(), timeout=0.01)
+    wsMessage = await asyncio.wait_for(ws.recv(), timeout=0.001)
   except asyncio.TimeoutError:
     pass
   if wsMessage:
@@ -55,12 +55,13 @@ while True:
     ticksPerSecond = 500 * 2
     for note in notes:
       midoNote = mido.Message(note[0], channel=note[2], note=note[3], velocity=note[4])
-      dueTime = curTime + (note[1] / ticksPerSecond)
+      # dueTime = curTime + (note[1] / ticksPerSecond)
+      dueTime = note[1]
+      # insert sorted by due time
       msglog.append({"msg": midoNote, "due": dueTime})
-      curTime = dueTime
+      # curTime = dueTime
+  # sort msglog by due time, since it's not guaranteed to be in order
+  msglog = deque(sorted(msglog, key=lambda x: x["due"]))
   while len(msglog) > 0 and msglog[0]["due"] <= time.time():
     msg = msglog.popleft()["msg"]
     outport0.send(msg)
-
-
-
