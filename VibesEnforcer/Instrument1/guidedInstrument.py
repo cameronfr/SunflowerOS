@@ -396,7 +396,7 @@ songOut = tokensToSongFormat(completion[0], model2=False)
 previewSongFormat(songOut)
 
 # # pregenerate biases for each note
-noteBiases = torch.zeros((128, 2831), requires_grad=False).cuda()
+pitchBiases = torch.zeros((128, 2831), requires_grad=False).cuda()
 for i in range(1152, (12*128)+1152):
   pitch = (i-1152) % 128
   channel = (i-1152) // 128
@@ -405,11 +405,16 @@ for i in range(1152, (12*128)+1152):
     continue
   # only bias towards piano, guitar, bass for now
   # if channel in [0, 1, 2, 5, 6, 7]: #9 is drums
-    # noteBiases[pitch][i] = 1
-  noteBiases[pitch][i] = 1
-  # If access noteBiases[p], will get biases in all octaves
-  for p in range(pitch % 12, 128, 12):
-    noteBiases[p][i] = 1
+    # pitchBiases[pitch][i] = 1
+  pitchBiases[pitch][i] = 1
+  # If access pitchBiases[p], will get biases in all octaves
+  # for p in range(pitch % 12, 128, 12):
+  #   pitchBiases[p][i] = 1
+
+instrumentBiases = torch.zeros((128, 2831), requires_grad=False).cuda()
+for i in range(1152, (12*128)+1152):
+  channel = (i-1152) // 128
+  instrumentBiases[channel][i] = 1
 
 
 torch.set_printoptions(precision=10, sci_mode=False)
@@ -418,18 +423,24 @@ torch.tensor([1.12345e-9])
 # for i in range(128):
 #   timingBiases
 
-# [0, 24, 32, 40, 42, 46, 56, 71, 73, 0, 53, 19, 0, 0, 0, 0][6]
+# [0, 24, 32, 40, 42, 46, 56, 71, 73, 0, 53, 19, 0, 0, 0, 0][4]
 temperature=0.8; top_p=0.99; promptLength = 256;
 # temperature=0.8; top_p=0.99; promptLength = 3;
 currentDueTime = time() + 1
 currentInput = torch.LongTensor([tokens[:promptLength]]).cuda()
+previewSongFormat(tokensToSongFormat(currentInput[0].cpu()))
 for i in range(12800):
   onChaPitchToken = False
   onTimingToken = False
-  if currentInput[0][-1] > 1152:
+  onDurVelToken = False
+  lastToken = currentInput[0][-1]
+  if lastToken > 1152:
     onTimingToken = True
-  elif (currentInput[0][-1] >= 128 and currentInput[0][-1] < 1152):
+  elif (lastToken >= 128 and lastToken < 1152):
     onChaPitchToken=True
+  elif lastToken < 128:
+    onDurVelToken = True
+
 
   # if len(currentlyPressedNotes) == 0 and onTimingToken:
   #   print(currentlyPressedNotes, time(), end="\r")
@@ -438,8 +449,14 @@ for i in range(12800):
   #   continue
 
   with torch.no_grad():
+    with torch.cuda.amp.autocast(): #On: 30ms 512, 30ms 1024. Off: 30ms 512, 50ms 1024.
     # logits = model.forward(currentInput[:, -model.max_seq_len:], return_loss=False)[:, -1, :] # remove seq dim
-    logits = model.forward(currentInput[:, -512:], return_loss=False)[:, -1, :] # remove seq dim
+      logits = model.forward(currentInput[:, -1024:], return_loss=False)[:, -1, :] # remove seq dim
+    # logits2test = model.forward(currentInput[:, -1024:], return_loss=False)[:, -1, :] # remove seq dim
+    # print(torch.max(torch.abs(logits-logits2test)))
+    # print(torch.sum(torch.abs(logits-logits2test)))
+    # max logit difference with quantization looked to be about 0.2, so not major. Sum of diff is about 80 avg, so about 0.03 per token on avg, which prob doesn't make diff
+    # 1024 is maybe 8-16 bars, 15-30 seconds?. depends on how many instruments
 
   currentlyPressedKorg = [n[0] for n in currentlyPressedNotes if n[1] == 0]
   # allowedNotes = []
@@ -451,35 +468,57 @@ for i in range(12800):
   currentlyPressedArturia = [n[0] for n in currentlyPressedNotes if n[1] == 1]
   NO_NOTE_REPEAT_KEY = 36# pad 1
   ENCOURAGE_CHORD_KEY = 37#pad 2
-  CHANGE_SONG_KEY = 38 #pad 3
-  DISCOURAGE_CHORD_KEY = 39 # pad 4
+  DISCOURAGE_CHORD_KEY = 38 # pad 3
+  SLOW_DOWN_KEY = 39 # pad 4
+  SPEED_UP_KEY = 40 # pad 5
+  ENCOURAGE_INSTR_KEY=41 # pad 6
+  # LONGER_NOTES_KEY = 42 # pad 7
+  LOUDER_NOTES_KEY = 42 # pad 7
+  # LONGER_NOTES_KEY = 43 # pad 8
+  # CHANGE_SONG_KEY = 43 #pad 8
 
   modified_logits = logits.clone()
   if onChaPitchToken:
     # tokensToBiasIndices = torch.tensor([[]])
-    tokensToBiasIndices = torch.where(torch.sum(noteBiases[currentlyPressedKorg], axis=0) != 0)
+    tokensToBiasIndices = torch.where(torch.sum(pitchBiases[currentlyPressedKorg], axis=0) != 0)
     modified_logits[0][tokensToBiasIndices] = modified_logits[0][tokensToBiasIndices] + 6
 
-    # tokensToRemoveIndices = torch.where((torch.sum(noteBiases[currentlyPressedKorg], axis=0) == 0))
+    # tokensToRemoveIndices = torch.where((torch.sum(pitchBiases[currentlyPressedKorg], axis=0) == 0))
     # print(tokensToRemoveIndices[0].shape)
     # modified_logits[0][tokensToRemoveIndices] -= 1 # could slighly bias against notes unpressed by me in last 10 seconds?
 
-  #   if NO_NOTE_REPEAT_KEY in currentlyPressedArturia:
-  #     lastChaPitchToken = currentInput[0][-3]
-  #     lastPitch = (lastChaPitchToken-1152) % 128
-  #     print("Biasing away from repeat, last pitch was", lastPitch, str(time()), end="\r")
-  #     modified_logits[0][torch.where(noteBiases[lastPitch] != 0)] = -2000
+    if NO_NOTE_REPEAT_KEY in currentlyPressedArturia:
+      lastChaPitchToken = currentInput[0][-3]
+      lastPitch = (lastChaPitchToken-1152) % 128
+      print("Biasing away from repeat, last pitch was", lastPitch, str(time()), end="\r")
+      modified_logits[0][torch.where(pitchBiases[lastPitch] != 0)] = -2000
+    if ENCOURAGE_INSTR_KEY in currentlyPressedArturia:
+      # just do organ for now. also TODO: change name to tokensToBiasIndices
+      inst = [11]
+      tokensToChangeIndices =  torch.where(torch.sum(instrumentBiases[[11]], axis=0) != 0)
+      modified_logits[0][tokensToChangeIndices] += 6
   if onTimingToken:
-    modified_logits[0][NEW_SONG_TKN] = -1000
-  #   if ENCOURAGE_CHORD_KEY in currentlyPressedArturia:
-  #     modified_logits[0][:4] +=8 # bias towards quickly repeated onsets in hopes of getting chords
-  #     # ends up encouraging other instruments to join
-  #     print("Biasing towards chords" + str(time()), end="\r")
-  #   if CHANGE_SONG_KEY in currentlyPressedArturia:
-  #     print("Trying to change song" + str(time()), end="\r")
-  #     modified_logits[0][NEW_SONG_TKN] += 10
-  #   if DISCOURAGE_CHORD_KEY in currentlyPressedArturia:
-  #     modified_logits[0][:6] -= 8
+    modified_logits[0][NEW_SONG_TKN] -= 1000
+    if ENCOURAGE_CHORD_KEY in currentlyPressedArturia:
+      modified_logits[0][:4] +=8 # bias towards quickly repeated onsets in hopes of getting chords
+      # ends up encouraging other instruments to join
+      print("Biasing towards chords" + str(time()), end="\r")
+    if CHANGE_SONG_KEY in currentlyPressedArturia:
+      print("Trying to change song" + str(time()), end="\r")
+      modified_logits[0][NEW_SONG_TKN] += 1010
+    if DISCOURAGE_CHORD_KEY in currentlyPressedArturia:
+      modified_logits[0][:10] -= 6
+    if SLOW_DOWN_KEY in currentlyPressedArturia:
+      modified_logits[0][10:50] -= 6
+      modified_logits[0][50:128] += 6
+    if SPEED_UP_KEY in currentlyPressedArturia:
+      modified_logits[0][10:50] += 6
+  if onDurVelToken:
+    if LOUDER_NOTES_KEY in currentlyPressedArturia:
+      modified_logits[0][128+128:128+1024] += 6 # longer duration (at least 64*16 ms)
+      modified_logits[0][128:128+1024][5::8] += 6
+      modified_logits[0][128:128+1024][6::8] += 6
+      modified_logits[0][128:128+1024][7::8] += 6
 
   filtered_logits = top_p_filter(modified_logits[0], top_p).unsqueeze(0) # add batch dim back so we're [batch, num_tokens]
   # ideas:
@@ -487,8 +526,12 @@ for i in range(12800):
   # "chord button" -- encourage chords
   # "instrument join" -- encourage other instruments to join in
   # "instrument solo" -- encourage other instruments to stop playing
+  # "encourage wider chords"
+  # "encourage this specific instrument"
+  # "encourage this specific chord" -- can keep track of chords / sequence being built,
   # "speed up / slow down"
   # sustain key -- longer note durations
+  # F.softmax(torch.tensor([-1.7, -1.7+6 ])) ln(50) = 3.91, so +3.91 means multiplying prob by 50
 
   probs = F.softmax(filtered_logits / temperature, dim = -1)
 
@@ -512,6 +555,17 @@ for i in range(12800):
         # print("Sampled note with pitch", pitch, "removing")
         # currentlyPressedNotes.remove([pitch, 0])
         pass
+  if ENCOURAGE_CHORD_KEY in currentlyPressedArturia:
+    if onTimingToken:
+      if token < 4:
+        print("Encouraged a chord!")
+        currentlyPressedNotes.remove([ENCOURAGE_CHORD_KEY, 1])
+  if ENCOURAGE_INSTR_KEY in currentlyPressedArturia:
+    if onChaPitchToken:
+      if (token-1152) // 128 == 11:
+        print("Encouraged instrument")
+        currentlyPressedNotes.remove([ENCOURAGE_INSTR_KEY, 1])
+
 
   if token == NEW_SONG_TKN:
     print("model started new song")
@@ -534,21 +588,23 @@ for i in range(12800):
         currentDueTime += deltaTime
         onEvent = ["note_on", currentDueTime, note[3], note[4], note[5]]
         offEvent = ["note_off", currentDueTime+duration, note[3], note[4], note[5]]
-        if note[3] not in [10,  6, 7, 9, 2, 1, 0]:
+        if note[3] not in [10,  6, 7, 9, 2, 1, 0, 11, 3, 4]:
           print("Got note on ch", note[3])
         else:
           asyncio.get_event_loop().create_task(mainWebsocket.send(json.dumps([onEvent, offEvent])))
   # note =['note', deltatime, duration, channel, pitch, velocity]
-  # if currentDueTime < time() + 0.01:
-  #   print("Model couldn't keep up ")
-  #   pass
-  # if currentDueTime < time() + 0.2:
-  #   print("note has less than 0.5 seconds buffer", currentDueTime - time(), "seconds")
-  #   currentDueTime += 0.6 # todo: model isn't aware of these changes
+  if currentDueTime < time() + 0.01:
+    print("Model couldn't keep up ")
+    pass
+  if currentDueTime < time() + 0.2:
+    print("note has less than 0.2 seconds buffer, adding time", currentDueTime - time(), "seconds")
+    currentDueTime += 0.2 # todo: model isn't aware of these changes
   if currentDueTime > time() + 0.8:
-    print("note has more than 0.8 seconds buffer", currentDueTime - time())
-    await asyncio.sleep(0.5)
+    # print("note has more than 0.8 seconds buffer", currentDueTime - time())
+    await asyncio.sleep(0.3)
     # currentDueTime = time() + 2 # todo: model isn't aware of these changes
+  if currentDueTime > time() + 1.5:
+    print("More than 1.5 seconds in buffer")
   await asyncio.sleep(0.0)
 
 previewSongFormat(tokensToSongFormat(currentInput.cpu()[0][promptLength:]))
