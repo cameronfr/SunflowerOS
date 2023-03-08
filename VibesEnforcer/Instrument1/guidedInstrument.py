@@ -6,7 +6,6 @@ import pickle
 import random
 import secrets
 import statistics
-from time import time
 import tqdm
 import torch
 import matplotlib.pyplot as plt
@@ -17,6 +16,13 @@ from IPython.display import Audio, display
 %cd ./Los-Angeles-Music-Composer
 from lwa_transformer import *
 import TMIDIX
+
+# pc and laptop are 2s apart, so need to sync
+import ntplib
+import time
+ntpOffset = ntplib.NTPClient().request('pool.ntp.org').offset
+def ntpTime():
+  return time.time() + ntpOffset
 
 full_path_to_model_checkpoint = "/home/cameronfranz/Los_Angeles_Music_Composer_Trained_Model_66010_steps_0.7282_loss.pth" #@param {type:"string"}
 SEQ_LEN = 4096
@@ -44,7 +50,6 @@ model2 = LocalTransformer(
 model2 = torch.nn.DataParallel(model2).cuda()
 model2.load_state_dict(torch.load(full_path_to_model2_checkpoint))
 model2.eval()
-
 
 
 def scoreToTokens(score, model2=False, num_instr_control=None, include_start_header=True):
@@ -207,7 +212,6 @@ def scoreToTokens(score, model2=False, num_instr_control=None, include_start_hea
               melody_chords_f1.append([m[0], dur_vel+128, cha_ptc+1152])
   return melody_chords_f
 
-
 # takes in three tokens which represent a note
 def tokensToNote(tokens, model2=False):
   deltatime = 0
@@ -248,6 +252,8 @@ def tokensToSongFormat(tokens, model2=False):
         song1.append(son)
       son = []
       son.append(s)
+  if len(son) == 3:
+    song1.append(son)
 
   for ss in song1:
     note = tokensToNote(ss)
@@ -287,6 +293,8 @@ def previewSongFormat(score):
   plt.xlabel("Time")
   plt.ylabel("Pitch")
   plt.show()
+
+
 
 # Takes logits of shape [num_tokens] -- no batch dim. In place filter :/
 def top_p_filter(logits, p):
@@ -343,6 +351,28 @@ def customGenerate(model, prime, seq_len, temperature=0.8, filter_thres=0.9, top
   else:
     return out[:, n:]
 
+
+pendingNotesBuffer = []
+currentlyPressedNotes = []
+lastNoteTime = ntpTime()
+def onNoteData(noteData):
+  global lastNoteTime
+  pendingNotesBuffer.append(noteData)
+
+  pitch = noteData["midi"]["note"]
+  channel = noteData["midi"]["channel"]
+  if noteData["midi"]["type"] == "note_on":
+    currentlyPressedNotes.append([pitch, channel])
+  elif noteData["midi"]["type"] == "note_off":
+    try:
+      currentlyPressedNotes.remove([pitch, channel]) # we might remove them elsewhere. TODO: don't do like tis, lol
+    except Exception as e:
+      pass
+
+# if noteData["midi"]["type"] == "note_on":
+#   addMidiEventToTokenInput(noteData["time"], noteData["midi"], tokenInput, lastNoteTime)
+#   lastNoteTime = noteData["time"]
+
 # MIDI Server
 import asyncio
 import copy
@@ -350,28 +380,21 @@ import nest_asyncio
 nest_asyncio.apply()
 import websockets
 import json
-notesBuffer = []
-currentlyPressedNotes = []
 mainWebsocket = None
 # server.close()
 async def handler(websocket, path):
   global mainWebsocket
   mainWebsocket = websocket
+  print("testOut")
   while(True):
     data = await websocket.recv()
     noteData = json.loads(data)
-    notesBuffer.append(noteData)
-    pitch = noteData["midi"]["note"]
-    channel = noteData["midi"]["channel"]
-    if noteData["midi"]["type"] == "note_on":
-      currentlyPressedNotes.append([pitch, channel])
-    elif noteData["midi"]["type"] == "note_off":
-      try:
-        currentlyPressedNotes.remove([pitch, channel]) # we might remove them elsewhere. TODO: don't do like tis, lol
-      except Exception as e:
-        pass
+    onNoteData(noteData)
 server = await websockets.serve(handler, "0.0.0.0", 8889, ping_timeout=None)
-task = asyncio.ensure_future(server.start_serving())
+task = asyncio.get_event_loop().create_task(server.serve_forever()) # doesn't print stdout or errors for some reason :/. Sometimes Need to await task to debug.
+# await task
+
+NEW_SONG_TKN = 2816
 
 # testMidi = "/home/cameronfranz/kgSongCC0.mid"
 testMidi = "/home/cameronfranz/kgSongCC0_transposed.mid"
@@ -398,7 +421,6 @@ previewSongFormat(songOut)
 # "tight button" -- encourage either perfectly same onsets, or at least one quarter note
 # "encourage wider chords"
 # "encourage this specific chord" -- can keep track of chords / sequence being built,
-NEW_SONG_TKN = 2816
 controlMappingArt = {
   "instCh0": 60-1, "instCh1": 60-2, "instCh2": 60-3, "instCh3": 60-4, "instCh4": 60-5, "instCh5": 60-6, "instCh6": 60-7, "instCh7": 60-8, "instCh8": 60-9, "instCh9": 60-10, "instCh10": 60-11, "instCh11": 60-12,
   "delayZero": 60, "delaySubQtr": 61, "delayMoreQtr": 62,
@@ -406,7 +428,6 @@ controlMappingArt = {
   "tempLower": 66, "tempHigher": 67,
   "probsDecrease2": 68, "probsDecrease1": 69, "probsIncrease1": 70, "probsIncrease2": 71,
   "velHigher": 36, "velLower": 37, # pads
-  ""
 }
 controlMappingArt = {v: k for k, v in controlMappingArt.items()}
 
@@ -429,12 +450,86 @@ for i in range(1152, (12*128)+1152):
 torch.set_printoptions(precision=10, sci_mode=False)
 torch.tensor([1.12345e-9])
 
-# [0, 24, 32, 40, 42, 46, 56, 71, 73, 0, 53, 19, 0, 0, 0, 0][4]
+
+# plt.hist(currentInput[0][3::3].cpu(), bins=range(59,70))
+
+# quantizes, more granular than scoreToTokens
+def addMidiEventToTokenInput(eventTime, midiEvent, tokenInput, lastNoteTime, quantize=False):
+  # quantize to nearest 16th note, 16th note = 1/4 beat, 500ms / beat (@120bpm), 500ms / 4 = 125ms / 16th note
+  # uses lastNoteTime as reference.
+
+  # currentInput = addMidiEventToTokenInput(pendingEvent["time"], pendingEvent["midi"], currentInput[0].cpu(), currentDueTime).cuda().unsqueeze(0)
+  # eventTime = pendingEvent["time"]
+  # midiEvent = pendingEvent["midi"]
+  # tokenInput = currentInput[0].cpu()
+  # lastNoteTime = currentDueTime
+
+  quantizedTime = eventTime#lastNoteTime + (round((eventTime-lastNoteTime)/ 0.125) * 0.125)
+
+  # assume tokenInput has a full token in it
+  insertPos = len(tokenInput)
+  cursorTime = float(lastNoteTime) #time of the note before the candidate insert position. Pytorch acting weird with the floats?
+  while True:
+    # print("cursorTime at pos", insertPos, "is", cursorTime)
+    if insertPos == 0:
+      break
+    if cursorTime < quantizedTime:
+      break
+    if cursorTime == quantizedTime:
+      pitchOfNoteBefore = (tokenInput[insertPos-1] - 1152) % 128
+      if midiEvent["note"] <= pitchOfNoteBefore:
+        break
+    cursorTime -= float(tokenInput[insertPos-3]*8) / 1000
+    # print("delta is", tokenInput[insertPos-3]*8)
+    insertPos -= 3
+
+  ticksDelta = (quantizedTime - cursorTime) * 1000 # maybe quantize here instead?
+  if quantize is True:
+    ticksDelta = round(ticksDelta / 64)*64
+
+  duration = 500 # don't handle note off events for now, just assume 500ms duration
+  e = [ticksDelta, duration, midiEvent["channel"], midiEvent["note"], midiEvent["velocity"]]
+
+  # Conversion
+  e[0] = math.ceil(e[0] / 8)
+  e[1] = math.ceil(e[1] / 16)
+  tim = max(0, min(127, e[0]))
+  dur = max(1, min(127, e[1]))
+  cha = max(0, min(11, e[2]))
+  ptc = max(1, min(127, e[3]))
+  vel = max(8, min(127, e[4]))
+  vel = round(vel / 15)
+
+  dur_vel = (dur * 8) + (vel-1)
+  cha_ptc = (cha * 128) + ptc
+
+  tokens = [tim, dur_vel+128, cha_ptc+1152]
+  out = torch.cat([tokenInput[:insertPos], torch.LongTensor(tokens), tokenInput[insertPos:]])
+
+  # print("desired insertion time is", eventTime, "time delta from prev is", ticksDelta/1000)
+  # print("next has original delta of", out[insertPos+3]*8)
+  if insertPos < len(tokenInput):
+    # fix the token after. it's delta is now it's original delta minus the inserted note's delta.
+    # print("fixing delta to", out[insertPos+3] - tim)
+    out[insertPos+3] = max(0, min(127, math.floor((out[insertPos+3] - tim))))
+
+  return out
+
+# testTokenInput = torch.LongTensor([])
+# testTokenInput = addMidiEventToTokenInput(1, {"channel": 0, "note":58, "velocity": 100}, testTokenInput, 1)
+# testTokenInput
+# previewSongFormat(tokensToSongFormat(testTokenInput))
+# test = addMidiEventToTokenInput(0, pendingEvent["midi"], testInput[0].cpu(), 10).cuda().unsqueeze(0)
+# previewSongFormat(tokensToSongFormat(test[0].cpu()))
+
+# [0, 24, 32, 40, 42, 46, 56, 71, 73, 0, 53, 19, 0, 0, 0, 0][8]
+pendingNotesBuffer = []
 temperature=0.8; top_p=0.99; promptLength = 256;
-currentDueTime = time() + 1
+currentDueTime = ntpTime() + 1
 currentNoteTokens = []
 currentInput = torch.LongTensor([tokens[:promptLength]]).cuda()
-# previewSongFormat(tokensToSongFormat(currentInput[0].cpu()))
+# currentInput = testInput
+previewSongFormat(tokensToSongFormat(currentInput[0][-1800:].cpu()))
 for i in range(12800):
   onChaPitchToken = False
   onTimingToken = False
@@ -447,12 +542,20 @@ for i in range(12800):
   elif lastToken < 128:
     onDurVelToken = True
 
+  if onTimingToken and len(pendingNotesBuffer) > 0:
+    while len(pendingNotesBuffer) > 0:
+      pendingEvent = pendingNotesBuffer.pop()
+      if pendingEvent["midi"]["type"] == "note_on" and pendingEvent["midi"]["channel"] == 0:
+        print("Adding a note")
+        # print(addMidiEventToTokenInput(pendingEvent["time"], pendingEvent["midi"], currentInput[0].cpu(), currentDueTime).cuda().unsqueeze(0))
+        currentInput = addMidiEventToTokenInput(pendingEvent["time"], pendingEvent["midi"], currentInput[0].cpu(), currentDueTime, quantize=True).cuda().unsqueeze(0)
+
   with torch.no_grad():
     with torch.cuda.amp.autocast(): #On: 30ms 512, 30ms 1024. Off: 30ms 512, 50ms 1024.
     # logits = model.forward(currentInput[:, -model.max_seq_len:], return_loss=False)[:, -1, :] # remove seq dim
-      logits = model.forward(currentInput[:, -1024:], return_loss=False)[:, -1, :] # remove seq dim
+      logits = model.forward(currentInput[:, -512:], return_loss=False)[:, -1, :] # remove seq dim
 
-  currentlyPressedKorg = [n[0] for n in currentlyPressedNotes if n[1] == 0]
+  currentlyPressedKorg = []#[n[0] for n in currentlyPressedNotes if n[1] == 0]
   currentlyPressedArturia = [n[0] for n in currentlyPressedNotes if n[1] == 1]
   modifiers = [controlMappingArt[n] for n in currentlyPressedArturia]
 
@@ -492,12 +595,12 @@ for i in range(12800):
     if NO_NOTE_REPEAT_KEY in currentlyPressedArturia:
       lastChaPitchToken = currentInput[0][-3]
       lastPitch = (lastChaPitchToken-1152) % 128
-      print("Biasing away from repeat, last pitch was", lastPitch, str(time()), end="\r")
+      print("Biasing away from repeat, last pitch was", lastPitch, str(ntpTime()), end="\r")
       modified_logits[0][torch.where(pitchBiases[lastPitch] != 0)] = -2000
   if onTimingToken:
     modified_logits[0][NEW_SONG_TKN] -= 1000
     if CHANGE_SONG_KEY in currentlyPressedArturia:
-      print("Trying to change song" + str(time()), end="\r")
+      print("Trying to change song" + str(ntpTime()), end="\r")
       modified_logits[0][NEW_SONG_TKN] += 1010
 
     # Union pressed desired times, then bias towards those times.
@@ -620,22 +723,22 @@ for i in range(12800):
         currentDueTime += deltaTime
         onEvent = ["note_on", currentDueTime, note[3], note[4], note[5]]
         offEvent = ["note_off", currentDueTime+duration, note[3], note[4], note[5]]
-        if note[3] not in [10,  6, 7, 9, 2, 1, 0, 11, 3, 4]:
+        if note[3] not in [10,  6, 7, 9, 2, 1, 0, 11, 3, 4, 8]:
           print("Got note on ch", note[3])
         else:
           asyncio.get_event_loop().create_task(mainWebsocket.send(json.dumps([onEvent, offEvent])))
   # note =['note', deltatime, duration, channel, pitch, velocity]
-  timeNow = time()
+  timeNow = ntpTime()
   if currentDueTime <timeNow + 0.01:
     print("Model couldn't keep up", end="\n")
   if currentDueTime < timeNow + 0.2:
     print("note has less than 0.2 seconds buffer, adding time")
     currentDueTime += 0.3 # todo: model isn't aware of these changes
   if currentDueTime > timeNow + 0.8:
-    # print("note has more than 0.8 seconds buffer", currentDueTime - time())
+    # print("note has more than 0.8 seconds buffer", currentDueTime - ntpTime())
     await asyncio.sleep(0.2)
-    # currentDueTime = time() + 2 # todo: model isn't aware of these changes
-  if currentDueTime > timeNow + 1.5:
+    # currentDueTime = ntpTime() + 2 # todo: model isn't aware of these changes
+  if currentDueTime > timeNow + 1.3:
     print("More than 1.5 seconds in buffer")
     await asyncio.sleep(0.4)
   await asyncio.sleep(0.0)

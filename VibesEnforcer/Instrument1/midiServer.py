@@ -6,7 +6,13 @@ import asyncio
 import websockets
 mido.set_backend('mido.backends.rtmidi')
 from collections import deque
-!pip show websocket-client
+
+# pc and laptop are 2s apart, so need to sync
+import ntplib
+import time
+ntpOffset = ntplib.NTPClient().request('pool.ntp.org').offset
+def ntpTime():
+  return time.time() + ntpOffset
 
 print(mido.get_input_names())
 print(mido.get_output_names())
@@ -28,7 +34,6 @@ outport0.send(msg)
 # ws.connect("ws://desktop-3vakahr:8889")
 ws = await websockets.connect("ws://desktop-3vakahr:8889")
 
-
 print("Start")
 #Rewritten for new version of mido
 while True:
@@ -38,9 +43,9 @@ while True:
   if msg and msg.type in ["note_on", "note_off"]:
     fullMessage = {
       "midi": {"type": msg.type, "note": msg.note, "velocity": msg.velocity, "channel": msg.channel},
-      "time": time.time(),
+      "time": ntpTime(),
     }
-    print(time.time(),msg)
+    print(ntpTime(),msg)
     await ws.send(json.dumps(fullMessage))
 
   # check if incoming ws message
@@ -51,7 +56,7 @@ while True:
     pass
   if wsMessage:
     notes = json.loads(wsMessage)
-    curTime = time.time()
+    curTime = ntpTime()
     ticksPerSecond = 500 * 2
     for note in notes:
       midoNote = mido.Message(note[0], channel=note[2], note=note[3], velocity=note[4])
@@ -62,6 +67,6 @@ while True:
       # curTime = dueTime
   # sort msglog by due time, since it's not guaranteed to be in order
   msglog = deque(sorted(msglog, key=lambda x: x["due"]))
-  while len(msglog) > 0 and msglog[0]["due"] <= time.time():
+  while len(msglog) > 0 and msglog[0]["due"] <= ntpTime():
     msg = msglog.popleft()["msg"]
     outport0.send(msg)
