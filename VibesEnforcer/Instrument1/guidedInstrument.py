@@ -356,7 +356,6 @@ pendingNotesBuffer = []
 currentlyPressedNotes = []
 lastNoteTime = ntpTime()
 def onNoteData(noteData):
-  global lastNoteTime
   pendingNotesBuffer.append(noteData)
 
   pitch = noteData["midi"]["note"]
@@ -428,6 +427,7 @@ controlMappingArt = {
   "tempLower": 66, "tempHigher": 67,
   "probsDecrease2": 68, "probsDecrease1": 69, "probsIncrease1": 70, "probsIncrease2": 71,
   "velHigher": 36, "velLower": 37, # pads
+  "delayQuantize12016th": 38,
 }
 controlMappingArt = {v: k for k, v in controlMappingArt.items()}
 
@@ -454,7 +454,7 @@ torch.tensor([1.12345e-9])
 # plt.hist(currentInput[0][3::3].cpu(), bins=range(59,70))
 
 # quantizes, more granular than scoreToTokens
-def addMidiEventToTokenInput(eventTime, midiEvent, tokenInput, lastNoteTime, quantize=False):
+def addMidiEventToTokenInput(eventTime, midiEvent, tokenInput, lastNoteTime, quantize=False, duration=1.0):
   # quantize to nearest 16th note, 16th note = 1/4 beat, 500ms / beat (@120bpm), 500ms / 4 = 125ms / 16th note
   # uses lastNoteTime as reference.
 
@@ -464,7 +464,10 @@ def addMidiEventToTokenInput(eventTime, midiEvent, tokenInput, lastNoteTime, qua
   # tokenInput = currentInput[0].cpu()
   # lastNoteTime = currentDueTime
 
-  quantizedTime = eventTime#lastNoteTime + (round((eventTime-lastNoteTime)/ 0.125) * 0.125)
+  quantizedTime = eventTime
+  if quantize is True:
+    quantizedTime = lastNoteTime + (round((eventTime-lastNoteTime)/ 0.125) * 0.125)
+    # don't quantize later because won't work if note is slightly before where it should be?
 
   # assume tokenInput has a full token in it
   insertPos = len(tokenInput)
@@ -485,10 +488,9 @@ def addMidiEventToTokenInput(eventTime, midiEvent, tokenInput, lastNoteTime, qua
 
   ticksDelta = (quantizedTime - cursorTime) * 1000 # maybe quantize here instead?
   if quantize is True:
-    ticksDelta = round(ticksDelta / 64)*64
+    ticksDelta = round(ticksDelta /(125))*(125)# assumes 120bpm. quantized to 16th note.
 
-  duration = 500 # don't handle note off events for now, just assume 500ms duration
-  e = [ticksDelta, duration, midiEvent["channel"], midiEvent["note"], midiEvent["velocity"]]
+  e = [ticksDelta, duration*1000, midiEvent["channel"], midiEvent["note"], midiEvent["velocity"]]
 
   # Conversion
   e[0] = math.ceil(e[0] / 8)
@@ -524,12 +526,14 @@ def addMidiEventToTokenInput(eventTime, midiEvent, tokenInput, lastNoteTime, qua
 
 # [0, 24, 32, 40, 42, 46, 56, 71, 73, 0, 53, 19, 0, 0, 0, 0][8]
 pendingNotesBuffer = []
+currentlyPressedNotes = []
 temperature=0.8; top_p=0.99; promptLength = 256;
 currentDueTime = ntpTime() + 1
 currentNoteTokens = []
-currentInput = torch.LongTensor([tokens[:promptLength]]).cuda()
+# currentInput = torch.LongTensor([tokens[:promptLength]]).cuda()
 # currentInput = testInput
-previewSongFormat(tokensToSongFormat(currentInput[0][-1800:].cpu()))
+selectedInstChannel = 0
+previewSongFormat(tokensToSongFormat(currentInput[0][-512:].cpu()))
 for i in range(12800):
   onChaPitchToken = False
   onTimingToken = False
@@ -542,22 +546,27 @@ for i in range(12800):
   elif lastToken < 128:
     onDurVelToken = True
 
+  currentlyPressedKorg = []#[n[0] for n in currentlyPressedNotes if n[1] == 0]
+  currentlyPressedArturia = [n[0] for n in currentlyPressedNotes if n[1] == 1]
+  modifiers = [controlMappingArt[n] for n in currentlyPressedArturia]
+
   if onTimingToken and len(pendingNotesBuffer) > 0:
-    while len(pendingNotesBuffer) > 0:
-      pendingEvent = pendingNotesBuffer.pop()
-      if pendingEvent["midi"]["type"] == "note_on" and pendingEvent["midi"]["channel"] == 0:
-        print("Adding a note")
-        # print(addMidiEventToTokenInput(pendingEvent["time"], pendingEvent["midi"], currentInput[0].cpu(), currentDueTime).cuda().unsqueeze(0))
-        currentInput = addMidiEventToTokenInput(pendingEvent["time"], pendingEvent["midi"], currentInput[0].cpu(), currentDueTime, quantize=True).cuda().unsqueeze(0)
+    # wait until user stops pressing notes before adding them -- this way we can also get duration
+    if len(currentlyPressedNotes) == 0 and pendingNotesBuffer[-1]["midi"]["type"] == "note_off":
+      while len(pendingNotesBuffer) > 0:
+        pendingEvent = pendingNotesBuffer.pop(0)
+        if pendingEvent["midi"]["type"] == "note_on" and pendingEvent["midi"]["channel"] == 0:
+          noteOffEvent = list(filter(lambda e: e["midi"]["type"] == "note_off" and e["midi"]["note"] == pendingEvent["midi"]["note"], pendingNotesBuffer))[0]
+          duration = noteOffEvent["time"] - pendingEvent["time"]
+          print("Adding a note with duration", duration)
+          pendingEvent["midi"]["channel"] = selectedInstChannel
+          # print(addMidiEventToTokenInput(pendingEvent["time"], pendingEvent["midi"], currentInput[0].cpu(), currentDueTime).cuda().unsqueeze(0))
+          currentInput = addMidiEventToTokenInput(pendingEvent["time"], pendingEvent["midi"], currentInput[0].cpu(), currentDueTime, quantize=True, duration=duration).cuda().unsqueeze(0)
 
   with torch.no_grad():
     with torch.cuda.amp.autocast(): #On: 30ms 512, 30ms 1024. Off: 30ms 512, 50ms 1024.
     # logits = model.forward(currentInput[:, -model.max_seq_len:], return_loss=False)[:, -1, :] # remove seq dim
       logits = model.forward(currentInput[:, -512:], return_loss=False)[:, -1, :] # remove seq dim
-
-  currentlyPressedKorg = []#[n[0] for n in currentlyPressedNotes if n[1] == 0]
-  currentlyPressedArturia = [n[0] for n in currentlyPressedNotes if n[1] == 1]
-  modifiers = [controlMappingArt[n] for n in currentlyPressedArturia]
 
 
   NO_NOTE_REPEAT_KEY = 42# pad 7
@@ -588,6 +597,8 @@ for i in range(12800):
     instBiasesMask = torch.zeros(2831, dtype=torch.bool).cuda()
     for i in range(12):
       if "instCh"+str(i) in modifiers:
+        selectedInstChannel = i
+        print("Set selected instrument to", i)
         instBiasesMask = instBiasesMask | (instrumentBiases[i] != 0)
     if torch.sum(instBiasesMask) > 0:
       biasMask = biasMask & instBiasesMask
@@ -612,6 +623,17 @@ for i in range(12800):
       timingBiasMask[4:66] = True # one qtr note at 120bpm is 500ms. 500ms / 8ms = 62
     if "delayMoreQtr" in modifiers:
       timingBiasMask[66:128] = True
+    if "delayQuantize12016th" in modifiers:
+      # timingBiasMask[0:2] = True
+      # timingBiasMask[8] = True #32nd
+      timingBiasMask[15:17] = True
+      timingBiasMask[30:33] = True
+      timingBiasMask[45:48] = True
+      timingBiasMask[62:64] = True
+      timingBiasMask[76:80] = True
+      timingBiasMask[91:95] = True
+      timingBiasMask[108:111] = True
+      timingBiasMask[123:127] = True
     if torch.sum(timingBiasMask) > 0:
       biasMask = biasMask & timingBiasMask
 
@@ -731,16 +753,16 @@ for i in range(12800):
   timeNow = ntpTime()
   if currentDueTime <timeNow + 0.01:
     print("Model couldn't keep up", end="\n")
-  if currentDueTime < timeNow + 0.2:
-    print("note has less than 0.2 seconds buffer, adding time")
+  if currentDueTime < timeNow + 0.1:
+    print("note has less than 0.1 seconds buffer, adding time")
     currentDueTime += 0.3 # todo: model isn't aware of these changes
   if currentDueTime > timeNow + 0.8:
     # print("note has more than 0.8 seconds buffer", currentDueTime - ntpTime())
     await asyncio.sleep(0.2)
     # currentDueTime = ntpTime() + 2 # todo: model isn't aware of these changes
-  if currentDueTime > timeNow + 1.3:
+  if currentDueTime > timeNow + 1.5:
     print("More than 1.5 seconds in buffer")
-    await asyncio.sleep(0.4)
+    await asyncio.sleep(0.3)
   await asyncio.sleep(0.0)
 
 previewSongFormat(tokensToSongFormat(currentInput.cpu()[0][promptLength:]))
