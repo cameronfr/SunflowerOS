@@ -244,8 +244,19 @@ def tokensToSongFormat(tokens, model2=False):
   son = []
   song1 = []
 
-  for s in song:
-    if s >= 128 and s < (12*128)+1152:
+  timingTokenIdx = None
+  if tokens[0] < 128:
+    timingTokenIdx = 0
+  elif tokens[1] < 128:
+    timingTokenIdx = 1
+  elif tokens[2] < 128:
+    timingTokenIdx = 2
+  else:
+    timingTokenIdx = 3
+
+  for i, s in enumerate(song[timingTokenIdx:]):
+    # if s >= 128 and s < (12*128)+1152:
+    if i % 3 != 0 and s < (12*128)+1152:
       son.append(s)
     else:
       if len(son) == 3:
@@ -413,7 +424,7 @@ modelInput = [tokens[:promptLength]] * 1
 modelInput = torch.LongTensor(modelInput).cuda()
 completion = customGenerate(model, modelInput, 256, temperature=0.8, top_p=0.99, return_prime=False, min_stop_token=(NEW_SONG_TKN if allowStop else 0), verbose=True, filter_thres=0.0)
 completion = completion.cpu().numpy()
-songOut = tokensToSongFormat(completion[0], model2=False)
+songOut = tokensToSongFormat(completion[0][2:], model2=False)
 previewSongFormat(songOut)
 
 # ideas:
@@ -428,6 +439,7 @@ controlMappingArt = {
   "probsDecrease2": 68, "probsDecrease1": 69, "probsIncrease1": 70, "probsIncrease2": 71,
   "velHigher": 36, "velLower": 37, # pads
   "delayQuantize12016th": 38,
+  "clearInsteadOfAdd": 39 # pad 4
 }
 controlMappingArt = {v: k for k, v in controlMappingArt.items()}
 
@@ -453,16 +465,58 @@ torch.tensor([1.12345e-9])
 
 # plt.hist(currentInput[0][3::3].cpu(), bins=range(59,70))
 
+def clearNotesByInstAndTime(tokenInput, lastNoteTime, instCh, startTime, endTime, quantize=False):
+  if not tokenInput[-1] >= 1152:
+    raise ValueError("not aligned")
+  # if quantize is True:
+  #   startTime = lastNoteTime + (round((startTime-lastNoteTime)/ 0.125) * 0.125)
+  #   endTime= lastNoteTime + (round((endTime-lastNoteTime)/ 0.125) * 0.125)
+
+  # tokenInput = currentInput[0].clone()
+  # lastNoteTime = currentDueTime
+  # instCh = 0
+  #
+  # convert to easier format
+  eventFormat = torch.zeros((len(tokenInput)//3, 3), dtype=torch.long)
+  eventFormat[:, 0] = tokenInput[::3]
+  eventFormat[:, 0] = torch.cumsum(eventFormat[:, 0], dim=0) * 8 # time ms
+  startDelta = eventFormat[0:1, 0].clone()
+  eventFormat[:, 1] = tokenInput[1::3] # dur_vel
+  eventFormat[:, 2] = tokenInput[2::3] # cha_pitch
+  eventFormat[:, 0] += int(lastNoteTime*1000) - eventFormat[-1, 0]
+
+  sameInstMask = (eventFormat[:, 2] - 1152) // 128 == instCh
+  # withinTimeMask = (eventFormat[:, 0] >= int(startTime*1000)) & (eventFormat[:, 0] <= int(endTime*1000))
+  withinTimeMask = (eventFormat[:, 0] >= int((startTime-0.05)*1000)) & (eventFormat[:, 0] <= int((endTime+0.05)*1000))
+  # if don't cast to int, comparisons are wrong for some reason...
+  mask = sameInstMask & withinTimeMask
+  eventFormat = eventFormat[~mask]
+
+  # convert back
+  tokenOutput = torch.zeros((len(eventFormat)*3), dtype=torch.long)
+  # undo cumsum
+  tokenOutput[0] = startDelta // 8
+  tokenOutput[3::3] = (eventFormat[1:, ::3] - eventFormat[:-1, ::3]).squeeze() // 8
+  # other dur_vel and cha_ptch
+  tokenOutput[1::3] = eventFormat[:, 1]
+  tokenOutput[2::3] = eventFormat[:, 2]
+
+  return tokenOutput
+
+# currentInput = torch.LongTensor([tokens[:promptLength]]).cpu()
+# currentInput = currentInput[:, :255]
+# currentInput[0][-1]
+# previewSongFormat(tokensToSongFormat(
+#   currentInput[0].cpu()
+# ))
+
+# def addMidiEventToTokenInput2(eventTime, midiEvent, tokenInput, lastNoteTime, quantize=False, duration=1.0):
+
+
 # quantizes, more granular than scoreToTokens
 def addMidiEventToTokenInput(eventTime, midiEvent, tokenInput, lastNoteTime, quantize=False, duration=1.0):
   # quantize to nearest 16th note, 16th note = 1/4 beat, 500ms / beat (@120bpm), 500ms / 4 = 125ms / 16th note
   # uses lastNoteTime as reference.
-
-  # currentInput = addMidiEventToTokenInput(pendingEvent["time"], pendingEvent["midi"], currentInput[0].cpu(), currentDueTime).cuda().unsqueeze(0)
-  # eventTime = pendingEvent["time"]
-  # midiEvent = pendingEvent["midi"]
-  # tokenInput = currentInput[0].cpu()
-  # lastNoteTime = currentDueTime
 
   quantizedTime = eventTime
   if quantize is True:
@@ -483,7 +537,7 @@ def addMidiEventToTokenInput(eventTime, midiEvent, tokenInput, lastNoteTime, qua
       if midiEvent["note"] <= pitchOfNoteBefore:
         break
     cursorTime -= float(tokenInput[insertPos-3]*8) / 1000
-    # print("delta is", tokenInput[insertPos-3]*8)
+    # print("delta is", float(tokenInput[insertPos-3]*8) / 1000)
     insertPos -= 3
 
   ticksDelta = (quantizedTime - cursorTime) * 1000 # maybe quantize here instead?
@@ -495,17 +549,18 @@ def addMidiEventToTokenInput(eventTime, midiEvent, tokenInput, lastNoteTime, qua
   # Conversion
   e[0] = math.ceil(e[0] / 8)
   e[1] = math.ceil(e[1] / 16)
-  tim = max(0, min(127, e[0]))
+  # tim = max(0, min(127, e[0]))
+  tim = e[0]
   dur = max(1, min(127, e[1]))
   cha = max(0, min(11, e[2]))
   ptc = max(1, min(127, e[3]))
   vel = max(8, min(127, e[4]))
   vel = round(vel / 15)
-
   dur_vel = (dur * 8) + (vel-1)
   cha_ptc = (cha * 128) + ptc
-
   tokens = [tim, dur_vel+128, cha_ptc+1152]
+
+  # print("Adding", tokens, "cha is", cha)
   out = torch.cat([tokenInput[:insertPos], torch.LongTensor(tokens), tokenInput[insertPos:]])
 
   # print("desired insertion time is", eventTime, "time delta from prev is", ticksDelta/1000)
@@ -513,7 +568,8 @@ def addMidiEventToTokenInput(eventTime, midiEvent, tokenInput, lastNoteTime, qua
   if insertPos < len(tokenInput):
     # fix the token after. it's delta is now it's original delta minus the inserted note's delta.
     # print("fixing delta to", out[insertPos+3] - tim)
-    out[insertPos+3] = max(0, min(127, math.floor((out[insertPos+3] - tim))))
+    # out[insertPos+3] = max(0, min(127, math.floor((out[insertPos+3] - tim))))
+    out[insertPos+3] = max(0, min(9999999, math.floor((out[insertPos+3] - tim))))
 
   return out
 
@@ -525,15 +581,16 @@ def addMidiEventToTokenInput(eventTime, midiEvent, tokenInput, lastNoteTime, qua
 # previewSongFormat(tokensToSongFormat(test[0].cpu()))
 
 # [0, 24, 32, 40, 42, 46, 56, 71, 73, 0, 53, 19, 0, 0, 0, 0][8]
+# if the chords aren't hitting at the same time, need to re-do the ntp time calculation
 pendingNotesBuffer = []
 currentlyPressedNotes = []
 temperature=0.8; top_p=0.99; promptLength = 256;
 currentDueTime = ntpTime() + 1
 currentNoteTokens = []
-# currentInput = torch.LongTensor([tokens[:promptLength]]).cuda()
+currentInput = torch.LongTensor([tokens[:promptLength]]).cuda()
 # currentInput = testInput
 selectedInstChannel = 0
-previewSongFormat(tokensToSongFormat(currentInput[0][-512:].cpu()))
+previewSongFormat(tokensToSongFormat(currentInput[0][-300:].cpu()))
 for i in range(12800):
   onChaPitchToken = False
   onTimingToken = False
@@ -546,24 +603,58 @@ for i in range(12800):
   elif lastToken < 128:
     onDurVelToken = True
 
-  currentlyPressedKorg = []#[n[0] for n in currentlyPressedNotes if n[1] == 0]
+  currentlyPressedKorg = [n[0] for n in currentlyPressedNotes if n[1] == 0]
   currentlyPressedArturia = [n[0] for n in currentlyPressedNotes if n[1] == 1]
   modifiers = [controlMappingArt[n] for n in currentlyPressedArturia]
 
   if onTimingToken and len(pendingNotesBuffer) > 0:
     # wait until user stops pressing notes before adding them -- this way we can also get duration
-    if len(currentlyPressedNotes) == 0 and pendingNotesBuffer[-1]["midi"]["type"] == "note_off":
-      while len(pendingNotesBuffer) > 0:
-        pendingEvent = pendingNotesBuffer.pop(0)
+
+    if len(currentlyPressedKorg) == 0 and pendingNotesBuffer[-1]["midi"]["type"] == "note_off" and pendingNotesBuffer[-1]["midi"]["channel"] == 0:
+      currentInputErrorBackup1 = currentInput.cpu().clone() # for debugging when CUDA errors happen
+      relevantPending = list(filter(lambda x: x["midi"]["channel"] == 0, pendingNotesBuffer))
+      startTime = relevantPending[0]["time"]
+      endTime = relevantPending[-1]["time"]
+
+      # previewSongFormat(tokensToSongFormat(
+      #   currentInput[0][-200:].cpu()
+      # ))
+      # previewSongFormat(tokensToSongFormat(
+      #   clearNotesByInstAndTime(currentInput[0].cpu(), currentDueTime, selectedInstChannel, startTime-0.05, endTime+0.05, quantize=False)
+      # ))
+      # previewSongFormat(tokensToSongFormat(
+      #   addMidiEventToTokenInput(relevantPending[0]["time"], relevantPending[0]["midi"], currentInput[0].cpu(), currentDueTime, quantize=True, duration=duration)
+      # ))
+
+      if "clearInsteadOfAdd" in modifiers:
+        # clear the middle area in currentInput where the notes should be insserted
+        currentInput = clearNotesByInstAndTime(currentInput[0].cpu(), currentDueTime, selectedInstChannel, startTime-0.05, endTime+0.05, quantize=False).cuda().unsqueeze(0)
+        currentInputErrorBackup2 = currentInput.cpu().clone() # for debugging when CUDA errors happen
+        print("Clearing instead of adding")
+
+      pendingNotesBufferErrorBackup = pendingNotesBuffer.copy()
+      while len(relevantPending) > 0:
+        pendingEvent = relevantPending.pop(0)
         if pendingEvent["midi"]["type"] == "note_on" and pendingEvent["midi"]["channel"] == 0:
-          noteOffEvent = list(filter(lambda e: e["midi"]["type"] == "note_off" and e["midi"]["note"] == pendingEvent["midi"]["note"], pendingNotesBuffer))[0]
+          noteOffEvent = list(filter(lambda e: e["midi"]["type"] == "note_off" and e["midi"]["note"] == pendingEvent["midi"]["note"], relevantPending))[0]
           duration = noteOffEvent["time"] - pendingEvent["time"]
           print("Adding a note with duration", duration)
           pendingEvent["midi"]["channel"] = selectedInstChannel
-          # print(addMidiEventToTokenInput(pendingEvent["time"], pendingEvent["midi"], currentInput[0].cpu(), currentDueTime).cuda().unsqueeze(0))
+
           currentInput = addMidiEventToTokenInput(pendingEvent["time"], pendingEvent["midi"], currentInput[0].cpu(), currentDueTime, quantize=True, duration=duration).cuda().unsqueeze(0)
 
+      currentInput
+      if "clearInsteadOfAdd" in modifiers:
+        # clear to the end. Don't do before because addMidiEventToTokenInput needs an end sentinel. Note that this will only clear one instrument
+        currentInputErrorBackup3 = currentInput.cpu().clone()
+        currentInput = clearNotesByInstAndTime(currentInput[0].cpu(), currentDueTime, selectedInstChannel, endTime+0.05, currentDueTime, quantize=False).cuda().unsqueeze(0)
+
+      pendingNotesBuffer = []
+
   with torch.no_grad():
+    if torch.max(currentInput) >= 2831:
+      print("Invalid token, stopping to preventing CUDA crash")
+      break
     with torch.cuda.amp.autocast(): #On: 30ms 512, 30ms 1024. Off: 30ms 512, 50ms 1024.
     # logits = model.forward(currentInput[:, -model.max_seq_len:], return_loss=False)[:, -1, :] # remove seq dim
       logits = model.forward(currentInput[:, -512:], return_loss=False)[:, -1, :] # remove seq dim
@@ -589,9 +680,10 @@ for i in range(12800):
   if "tempHigher" in modifiers:
     biasedTokensTemp = 1.4
   if onChaPitchToken:
-    pitchBiasesMask = torch.sum(pitchBiases[currentlyPressedKorg], axis=0) != 0
-    if torch.sum(pitchBiasesMask) > 0:
-      biasMask = biasMask & pitchBiasesMask
+    # ignore pitch biases for now
+    # pitchBiasesMask = torch.sum(pitchBiases[currentlyPressedKorg], axis=0) != 0
+    # if torch.sum(pitchBiasesMask) > 0:
+    #   biasMask = biasMask & pitchBiasesMask
 
     # Instruments bias. If none pressed, do nothing. If multiple pressed, bias towards union of those instruments.
     instBiasesMask = torch.zeros(2831, dtype=torch.bool).cuda()
@@ -687,13 +779,13 @@ for i in range(12800):
     #         currentlyPressedNotes = []
     #       else:
     #         currentlyPressedNotes.remove([tokenPitch, 0])
-    if len(currentNoteTokens) > 0:
-      if tokenPitch in currentlyPressedKorg:
-        print("Introduced desired note, clearing that note")
-        if len(currentlyPressedKorg) == 1:
-          currentlyPressedNotes = []
-        else:
-          currentlyPressedNotes.remove([tokenPitch, 0])
+    # if len(currentNoteTokens) > 0:
+      # if tokenPitch in currentlyPressedKorg:
+      #   print("Introduced desired note, clearing that note")
+      #   if len(currentlyPressedKorg) == 1:
+      #     currentlyPressedNotes = []
+      #   else:
+      #     currentlyPressedNotes.remove([tokenPitch, 0])
 
 
 
