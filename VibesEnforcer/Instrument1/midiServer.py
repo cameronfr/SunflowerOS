@@ -55,16 +55,19 @@ while True:
   except asyncio.TimeoutError:
     pass
   if wsMessage:
-    notes = json.loads(wsMessage)
-    curTime = ntpTime()
-    ticksPerSecond = 500 * 2
-    for note in notes:
-      midoNote = mido.Message(note[0], channel=note[2], note=note[3], velocity=note[4])
-      # dueTime = curTime + (note[1] / ticksPerSecond)
-      dueTime = note[1]
-      # insert sorted by due time
-      msglog.append({"msg": midoNote, "due": dueTime})
-      # curTime = dueTime
+    wsMessage = json.loads(wsMessage)
+    if wsMessage["type"] == "notes":
+      curTime = ntpTime()
+      ticksPerSecond = 500 * 2
+      notes = wsMessage["notes"]
+      for note in notes:
+        midoNote = mido.Message(note[0], channel=note[2], note=note[3], velocity=note[4])
+        dueTime = note[1]
+        msglog.append({"msg": midoNote, "due": dueTime})
+    elif wsMessage["type"] == "clearAllFutureForInst":
+      instToClear = wsMessage["inst"]
+      curTime = ntpTime()
+      msglog = deque([x for x in msglog if x["msg"].channel != instToClear])
   # sort msglog by due time, since it's not guaranteed to be in order
   msglog = deque(sorted(msglog, key=lambda x: x["due"]))
   while len(msglog) > 0 and msglog[0]["due"] <= ntpTime():

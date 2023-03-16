@@ -273,7 +273,7 @@ def tokensToSongFormat(tokens, model2=False):
     song_f.append(note)
   return song_f
 
-def previewSongFormat(score):
+def previewSongFormat(score, audio=True):
   fname = "LAMC_tmp"
 
   detailed_stats = TMIDIX.Tegridy_SONG_to_MIDI_Converter(score, output_signature = 'Los Angeles Music Composer', output_file_name=fname, track_name='Project Los Angeles', list_of_MIDI_patches=[0, 24, 32, 40, 42, 46, 56, 71, 73, 0, 53, 19, 0, 0, 0, 0], number_of_ticks_per_quarter=500)
@@ -287,8 +287,9 @@ def previewSongFormat(score):
     y.append(s[4])
     c.append(colors[s[3]])
 
-  FluidSynth("/usr/share/sounds/sf2/FluidR3_GM.sf2", 16000).midi_to_audio(str(fname+'.mid'), str(fname+'.wav'))
-  display(Audio(str(fname+'.wav'), rate=16000, autoplay=False))
+  if audio:
+    FluidSynth("/usr/share/sounds/sf2/FluidR3_GM.sf2", 16000).midi_to_audio(str(fname+'.mid'), str(fname+'.wav'))
+    display(Audio(str(fname+'.wav'), rate=16000, autoplay=False))
 
   plt.figure(figsize=(14,12))
   ax=plt.axes(title=fname)
@@ -439,7 +440,9 @@ controlMappingArt = {
   "probsDecrease2": 68, "probsDecrease1": 69, "probsIncrease1": 70, "probsIncrease2": 71,
   "velHigher": 36, "velLower": 37, # pads
   "delayQuantize12016th": 38,
-  "clearInsteadOfAdd": 39 # pad 4
+  "addInsteadOfClear": 39, # pad 4
+  "addNewSongTokenInFront": 40, # pad5
+  "removeBeforePrompt": 41, #pad6
 }
 controlMappingArt = {v: k for k, v in controlMappingArt.items()}
 
@@ -465,7 +468,7 @@ torch.tensor([1.12345e-9])
 
 # plt.hist(currentInput[0][3::3].cpu(), bins=range(59,70))
 
-def clearNotesByInstAndTime(tokenInput, lastNoteTime, instCh, startTime, endTime, quantize=False):
+def clearNotesByInstAndTime(tokenInput, lastNoteTime, instCh, startTime, endTime, quantize=False, allChannels=False):
   if not tokenInput[-1] >= 1152:
     raise ValueError("not aligned")
   # if quantize is True:
@@ -486,8 +489,11 @@ def clearNotesByInstAndTime(tokenInput, lastNoteTime, instCh, startTime, endTime
   eventFormat[:, 0] += int(lastNoteTime*1000) - eventFormat[-1, 0]
 
   sameInstMask = (eventFormat[:, 2] - 1152) // 128 == instCh
-  # withinTimeMask = (eventFormat[:, 0] >= int(startTime*1000)) & (eventFormat[:, 0] <= int(endTime*1000))
-  withinTimeMask = (eventFormat[:, 0] >= int((startTime-0.05)*1000)) & (eventFormat[:, 0] <= int((endTime+0.05)*1000))
+  sameInstMask |= (eventFormat[:, 2] - 1152) // 128 >= 12 # get rid of composition control tokens
+  if allChannels:
+    sameInstMask[:] = True
+  withinTimeMask = (eventFormat[:, 0] >= int(startTime*1000)) & (eventFormat[:, 0] <= int(endTime*1000))
+  # withinTimeMask = (eventFormat[:, 0] >= int((startTime-0.05)*1000)) & (eventFormat[:, 0] <= int((endTime+0.05)*1000))
   # if don't cast to int, comparisons are wrong for some reason...
   mask = sameInstMask & withinTimeMask
   eventFormat = eventFormat[~mask]
@@ -581,16 +587,16 @@ def addMidiEventToTokenInput(eventTime, midiEvent, tokenInput, lastNoteTime, qua
 # previewSongFormat(tokensToSongFormat(test[0].cpu()))
 
 # [0, 24, 32, 40, 42, 46, 56, 71, 73, 0, 53, 19, 0, 0, 0, 0][8]
-# if the chords aren't hitting at the same time, need to re-do the ntp time calculation
+# if the chords aren't hitting at the same time, need to re-do the ntp time calculation on both ends.
 pendingNotesBuffer = []
 currentlyPressedNotes = []
-temperature=0.8; top_p=0.99; promptLength = 256;
+temperature=0.8; top_p=0.99; promptLength =256;
 currentDueTime = ntpTime() + 1
 currentNoteTokens = []
 currentInput = torch.LongTensor([tokens[:promptLength]]).cuda()
 # currentInput = testInput
 selectedInstChannel = 0
-previewSongFormat(tokensToSongFormat(currentInput[0][-300:].cpu()))
+previewSongFormat(tokensToSongFormat(currentInput[0][:].cpu()))
 for i in range(12800):
   onChaPitchToken = False
   onTimingToken = False
@@ -606,13 +612,18 @@ for i in range(12800):
   currentlyPressedKorg = [n[0] for n in currentlyPressedNotes if n[1] == 0]
   currentlyPressedArturia = [n[0] for n in currentlyPressedNotes if n[1] == 1]
   modifiers = [controlMappingArt[n] for n in currentlyPressedArturia]
+  pendingPlayNotes = list(filter(lambda x: x["midi"]["channel"] == 0, pendingNotesBuffer))
 
-  if onTimingToken and len(pendingNotesBuffer) > 0:
+  # if "addInsteadOfClear" not in modifiers:
+  if len(pendingPlayNotes) > 0 and "addInsteadOfClear" not in modifiers:
+    # mute notes while we're adding noets
+    msg = {"type": "clearAllFutureForInst", "inst": selectedInstChannel}
+    asyncio.get_event_loop().create_task(mainWebsocket.send(json.dumps(msg)))
+  if onTimingToken and len(pendingPlayNotes) > 0:
     # wait until user stops pressing notes before adding them -- this way we can also get duration
-
-    if len(currentlyPressedKorg) == 0 and pendingNotesBuffer[-1]["midi"]["type"] == "note_off" and pendingNotesBuffer[-1]["midi"]["channel"] == 0:
-      currentInputErrorBackup1 = currentInput.cpu().clone() # for debugging when CUDA errors happen
-      relevantPending = list(filter(lambda x: x["midi"]["channel"] == 0, pendingNotesBuffer))
+    if len(currentlyPressedKorg) == 0 and pendingPlayNotes[-1]["midi"]["type"] == "note_off" and pendingPlayNotes[-1]["midi"]["channel"] == 0:
+      # relevantPending = list(filter(lambda x: x["midi"]["channel"] == 0, pendingNotesBuffer))
+      relevantPending = pendingPlayNotes
       startTime = relevantPending[0]["time"]
       endTime = relevantPending[-1]["time"]
 
@@ -626,13 +637,12 @@ for i in range(12800):
       #   addMidiEventToTokenInput(relevantPending[0]["time"], relevantPending[0]["midi"], currentInput[0].cpu(), currentDueTime, quantize=True, duration=duration)
       # ))
 
-      if "clearInsteadOfAdd" in modifiers:
+      if "addInsteadOfClear" not in modifiers:
         # clear the middle area in currentInput where the notes should be insserted
-        currentInput = clearNotesByInstAndTime(currentInput[0].cpu(), currentDueTime, selectedInstChannel, startTime-0.05, endTime+0.05, quantize=False).cuda().unsqueeze(0)
+        currentInput = clearNotesByInstAndTime(currentInput[0].cpu(), currentDueTime, selectedInstChannel, startTime-0.05, endTime+0.05, quantize=True).cuda().unsqueeze(0)
         currentInputErrorBackup2 = currentInput.cpu().clone() # for debugging when CUDA errors happen
         print("Clearing instead of adding")
 
-      pendingNotesBufferErrorBackup = pendingNotesBuffer.copy()
       while len(relevantPending) > 0:
         pendingEvent = relevantPending.pop(0)
         if pendingEvent["midi"]["type"] == "note_on" and pendingEvent["midi"]["channel"] == 0:
@@ -641,15 +651,27 @@ for i in range(12800):
           print("Adding a note with duration", duration)
           pendingEvent["midi"]["channel"] = selectedInstChannel
 
-          currentInput = addMidiEventToTokenInput(pendingEvent["time"], pendingEvent["midi"], currentInput[0].cpu(), currentDueTime, quantize=True, duration=duration).cuda().unsqueeze(0)
+          currentInput = addMidiEventToTokenInput(pendingEvent["time"], pendingEvent["midi"], currentInput[0].cpu(), currentDueTime, quantize=False, duration=duration).cuda().unsqueeze(0)
 
-      currentInput
-      if "clearInsteadOfAdd" in modifiers:
+      if "removeBeforePrompt" in modifiers:
+        print("Clearing before prompt")
+        currentInput = clearNotesByInstAndTime(currentInput[0].cpu(), currentDueTime, selectedInstChannel, 0,startTime+0.05, quantize=False, allChannels=True).cuda().unsqueeze(0)
+        currentDueTime
+        currentInput[0][0]=0 # change first timing token
+        #TODO: this code doesn't work properly
+      if "addInsteadOfClear" not in modifiers:
         # clear to the end. Don't do before because addMidiEventToTokenInput needs an end sentinel. Note that this will only clear one instrument
-        currentInputErrorBackup3 = currentInput.cpu().clone()
-        currentInput = clearNotesByInstAndTime(currentInput[0].cpu(), currentDueTime, selectedInstChannel, endTime+0.05, currentDueTime, quantize=False).cuda().unsqueeze(0)
+        # currentInput = clearNotesByInstAndTime(currentInput[0].cpu(), currentDueTime, selectedInstChannel, endTime+0.05, currentDueTime, quantize=False).cuda().unsqueeze(0)
+        currentInput = clearNotesByInstAndTime(currentInput[0].cpu(), currentDueTime, selectedInstChannel, endTime, currentDueTime, quantize=False, allChannels=True).cuda().unsqueeze(0)
+        # If do endTime+0.05, timing will be more preserved, but since model is two notes ahead it will usually think the input has "ended"
+      if "addNewSongTokenInFront" in modifiers:
+        print("Adding new song token in front of prompt")
+        drumsToken = 2817 # no drums
+        numInstrToken = 2819 + (3 - 1) # 3 instruments
+        currentInput = torch.cat([torch.LongTensor([2816, drumsToken, numInstrToken]).cuda().unsqueeze(0), currentInput], dim=1)
 
       pendingNotesBuffer = []
+      previewSongFormat(tokensToSongFormat(currentInput[0][-256:].cpu()), audio=False)
 
   with torch.no_grad():
     if torch.max(currentInput) >= 2831:
@@ -657,7 +679,7 @@ for i in range(12800):
       break
     with torch.cuda.amp.autocast(): #On: 30ms 512, 30ms 1024. Off: 30ms 512, 50ms 1024.
     # logits = model.forward(currentInput[:, -model.max_seq_len:], return_loss=False)[:, -1, :] # remove seq dim
-      logits = model.forward(currentInput[:, -512:], return_loss=False)[:, -1, :] # remove seq dim
+      logits = model.forward(currentInput[:, -1024:], return_loss=False)[:, -1, :] # remove seq dim
 
 
   NO_NOTE_REPEAT_KEY = 42# pad 7
@@ -718,12 +740,12 @@ for i in range(12800):
     if "delayQuantize12016th" in modifiers:
       # timingBiasMask[0:2] = True
       # timingBiasMask[8] = True #32nd
-      timingBiasMask[15:17] = True
-      timingBiasMask[30:33] = True
-      timingBiasMask[45:48] = True
-      timingBiasMask[62:64] = True
-      timingBiasMask[76:80] = True
-      timingBiasMask[91:95] = True
+      timingBiasMask[15:17] = True # 16th
+      timingBiasMask[30:33] = True # 8th
+      timingBiasMask[45:48] = True # 8th+16th (8dot)
+      timingBiasMask[62:64] = True # quarter
+      timingBiasMask[76:80] = True # quarter + 16th
+      timingBiasMask[91:95] = True # quarter + 8th
       timingBiasMask[108:111] = True
       timingBiasMask[123:127] = True
     if torch.sum(timingBiasMask) > 0:
@@ -840,7 +862,8 @@ for i in range(12800):
         if note[3] not in [10,  6, 7, 9, 2, 1, 0, 11, 3, 4, 8]:
           print("Got note on ch", note[3])
         else:
-          asyncio.get_event_loop().create_task(mainWebsocket.send(json.dumps([onEvent, offEvent])))
+          msg = {"type": "notes", "notes": [onEvent, offEvent]}
+          asyncio.get_event_loop().create_task(mainWebsocket.send(json.dumps(msg)))
   # note =['note', deltatime, duration, channel, pitch, velocity]
   timeNow = ntpTime()
   if currentDueTime <timeNow + 0.01:
