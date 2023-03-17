@@ -443,6 +443,7 @@ controlMappingArt = {
   "addInsteadOfClear": 39, # pad 4
   "addNewSongTokenInFront": 40, # pad5
   "removeBeforePrompt": 41, #pad6
+  "reducePromptToLast5Seconds": 42 # pad7
 }
 controlMappingArt = {v: k for k, v in controlMappingArt.items()}
 
@@ -594,9 +595,11 @@ temperature=0.8; top_p=0.99; promptLength =256;
 currentDueTime = ntpTime() + 1
 currentNoteTokens = []
 currentInput = torch.LongTensor([tokens[:promptLength]]).cuda()
-# currentInput = testInput
+# currentInput = testInput.unsqueeze(0)
+# currentInput[0][0] = 249
+# testInput = currentInput[0][:18*3]
 selectedInstChannel = 0
-previewSongFormat(tokensToSongFormat(currentInput[0][:].cpu()))
+previewSongFormat(tokensToSongFormat(currentInput[0][-1024:].cpu()))
 for i in range(12800):
   onChaPitchToken = False
   onTimingToken = False
@@ -611,17 +614,28 @@ for i in range(12800):
 
   currentlyPressedKorg = [n[0] for n in currentlyPressedNotes if n[1] == 0]
   currentlyPressedArturia = [n[0] for n in currentlyPressedNotes if n[1] == 1]
-  modifiers = [controlMappingArt[n] for n in currentlyPressedArturia]
   pendingPlayNotes = list(filter(lambda x: x["midi"]["channel"] == 0, pendingNotesBuffer))
+  pendingControlNotes = list(filter(lambda x: x["midi"]["channel"] == 1, pendingNotesBuffer))
+  modifiers = [controlMappingArt[n] for n in currentlyPressedArturia]
+  statefulModifiers = [controlMappingArt[n["midi"]["note"]] for n in pendingControlNotes if n["midi"]["type"] == "note_on"]
 
   # if "addInsteadOfClear" not in modifiers:
-  if len(pendingPlayNotes) > 0 and "addInsteadOfClear" not in modifiers:
+  if len(pendingPlayNotes) > 0 and "addInsteadOfClear" not in statefulModifiers:
     # mute notes while we're adding noets
     msg = {"type": "clearAllFutureForInst", "inst": selectedInstChannel}
     asyncio.get_event_loop().create_task(mainWebsocket.send(json.dumps(msg)))
+  if onTimingToken and "reducePromptToLast5Seconds" in modifiers:
+    print("Reducing input prompt to last 5 seconds")
+    currentInput = clearNotesByInstAndTime(currentInput[0].cpu(), currentDueTime, selectedInstChannel, 0, currentDueTime-5, quantize=False, allChannels=True).cuda().unsqueeze(0)
+    previewSongFormat(tokensToSongFormat(currentInput[0][-1024:].cpu()), audio=False)
+    currentlyPressedNotes = []
   if onTimingToken and len(pendingPlayNotes) > 0:
-    # wait until user stops pressing notes before adding them -- this way we can also get duration
-    if len(currentlyPressedKorg) == 0 and pendingPlayNotes[-1]["midi"]["type"] == "note_off" and pendingPlayNotes[-1]["midi"]["channel"] == 0:
+    # wait until user stops pressing notes before adding them -- this way we can also get duration. For some controls keys, wait until its not being pressed anymore
+    finishedAddition = len(currentlyPressedKorg) == 0 and pendingPlayNotes[-1]["midi"]["type"] == "note_off" and pendingPlayNotes[-1]["midi"]["channel"] == 0
+    # if "addInsteadOfClear" not in statefulModifiers and len(pendingControlNotes) > 0:
+    if len(pendingControlNotes) > 0:
+      finishedAddition &= pendingControlNotes[-1]["midi"]["type"] == "note_off"
+    if finishedAddition:
       # relevantPending = list(filter(lambda x: x["midi"]["channel"] == 0, pendingNotesBuffer))
       relevantPending = pendingPlayNotes
       startTime = relevantPending[0]["time"]
@@ -637,10 +651,9 @@ for i in range(12800):
       #   addMidiEventToTokenInput(relevantPending[0]["time"], relevantPending[0]["midi"], currentInput[0].cpu(), currentDueTime, quantize=True, duration=duration)
       # ))
 
-      if "addInsteadOfClear" not in modifiers:
+      if "addInsteadOfClear" not in statefulModifiers:
         # clear the middle area in currentInput where the notes should be insserted
         currentInput = clearNotesByInstAndTime(currentInput[0].cpu(), currentDueTime, selectedInstChannel, startTime-0.05, endTime+0.05, quantize=True).cuda().unsqueeze(0)
-        currentInputErrorBackup2 = currentInput.cpu().clone() # for debugging when CUDA errors happen
         print("Clearing instead of adding")
 
       while len(relevantPending) > 0:
@@ -653,25 +666,30 @@ for i in range(12800):
 
           currentInput = addMidiEventToTokenInput(pendingEvent["time"], pendingEvent["midi"], currentInput[0].cpu(), currentDueTime, quantize=False, duration=duration).cuda().unsqueeze(0)
 
-      if "removeBeforePrompt" in modifiers:
+      if "removeBeforePrompt" in statefulModifiers:
         print("Clearing before prompt")
         currentInput = clearNotesByInstAndTime(currentInput[0].cpu(), currentDueTime, selectedInstChannel, 0,startTime+0.05, quantize=False, allChannels=True).cuda().unsqueeze(0)
         currentDueTime
         currentInput[0][0]=0 # change first timing token
         #TODO: this code doesn't work properly
-      if "addInsteadOfClear" not in modifiers:
-        # clear to the end. Don't do before because addMidiEventToTokenInput needs an end sentinel. Note that this will only clear one instrument
+      if False or ("addInsteadOfClear" not in statefulModifiers):
+        # clear to the end. Don't do before because addMidiEventToTokenInput needs an end sentinel.
         # currentInput = clearNotesByInstAndTime(currentInput[0].cpu(), currentDueTime, selectedInstChannel, endTime+0.05, currentDueTime, quantize=False).cuda().unsqueeze(0)
         currentInput = clearNotesByInstAndTime(currentInput[0].cpu(), currentDueTime, selectedInstChannel, endTime, currentDueTime, quantize=False, allChannels=True).cuda().unsqueeze(0)
         # If do endTime+0.05, timing will be more preserved, but since model is two notes ahead it will usually think the input has "ended"
-      if "addNewSongTokenInFront" in modifiers:
+        # if do this when adding notes (i.e. when addInsteadOfClear), the output becomes much less stable. Whereas, when add notes in the prompt slightly behind the frontier, it's much more stable
+      if "addNewSongTokenInFront" in statefulModifiers:
         print("Adding new song token in front of prompt")
         drumsToken = 2817 # no drums
         numInstrToken = 2819 + (3 - 1) # 3 instruments
         currentInput = torch.cat([torch.LongTensor([2816, drumsToken, numInstrToken]).cuda().unsqueeze(0), currentInput], dim=1)
 
+      #TODO: switch addMidiEventToTokenInput etc to the cleaner tensor format, so don't this
+      startIdx = -3*(currentInput[0].shape[0] // 3)
+      currentInput[0][startIdx::3] = torch.clip(currentInput[0][startIdx::3], 0, 127) # clip because addMidiEventToTokenInput uses >2s timings as intermediate step
+
       pendingNotesBuffer = []
-      previewSongFormat(tokensToSongFormat(currentInput[0][-256:].cpu()), audio=False)
+      previewSongFormat(tokensToSongFormat(currentInput[0][-1024:].cpu()), audio=False)
 
   with torch.no_grad():
     if torch.max(currentInput) >= 2831:
