@@ -378,6 +378,7 @@ def onNoteData(noteData):
     try:
       currentlyPressedNotes.remove([pitch, channel]) # we might remove them elsewhere. TODO: don't do like tis, lol
     except Exception as e:
+      print("Exception when removing from notes buffer")
       pass
 
 # if noteData["midi"]["type"] == "note_on":
@@ -443,7 +444,8 @@ controlMappingArt = {
   "addInsteadOfClear": 39, # pad 4
   "addNewSongTokenInFront": 40, # pad5
   "removeBeforePrompt": 41, #pad6
-  "reducePromptToLast5Seconds": 42 # pad7
+  "reducePromptToLast5Seconds": 42, # pad7
+  "subtleAdd": 43 # pad 8
 }
 controlMappingArt = {v: k for k, v in controlMappingArt.items()}
 
@@ -591,7 +593,8 @@ def addMidiEventToTokenInput(eventTime, midiEvent, tokenInput, lastNoteTime, qua
 # if the chords aren't hitting at the same time, need to re-do the ntp time calculation on both ends.
 pendingNotesBuffer = []
 currentlyPressedNotes = []
-temperature=0.8; top_p=0.99; promptLength =256;
+temperature=0.7; top_p=0.999; promptLength =256;
+# temperature=0.8; top_p=0.99; promptLength =256;
 currentDueTime = ntpTime() + 1
 currentNoteTokens = []
 currentInput = torch.LongTensor([tokens[:promptLength]]).cuda()
@@ -600,7 +603,7 @@ currentInput = torch.LongTensor([tokens[:promptLength]]).cuda()
 # testInput = currentInput[0][:18*3]
 selectedInstChannel = 0
 previewSongFormat(tokensToSongFormat(currentInput[0][-1024:].cpu()))
-for i in range(12800):
+for i in range(128000):
   onChaPitchToken = False
   onTimingToken = False
   onDurVelToken = False
@@ -620,7 +623,7 @@ for i in range(12800):
   statefulModifiers = [controlMappingArt[n["midi"]["note"]] for n in pendingControlNotes if n["midi"]["type"] == "note_on"]
 
   # if "addInsteadOfClear" not in modifiers:
-  if len(pendingPlayNotes) > 0 and "addInsteadOfClear" not in statefulModifiers:
+  if "removeBeforePrompt" in statefulModifiers or (len(pendingPlayNotes) > 0 and "addInsteadOfClear" not in statefulModifiers):
     # mute notes while we're adding noets
     msg = {"type": "clearAllFutureForInst", "inst": selectedInstChannel}
     asyncio.get_event_loop().create_task(mainWebsocket.send(json.dumps(msg)))
@@ -636,24 +639,16 @@ for i in range(12800):
     if len(pendingControlNotes) > 0:
       finishedAddition &= pendingControlNotes[-1]["midi"]["type"] == "note_off"
     if finishedAddition:
-      # relevantPending = list(filter(lambda x: x["midi"]["channel"] == 0, pendingNotesBuffer))
       relevantPending = pendingPlayNotes
       startTime = relevantPending[0]["time"]
       endTime = relevantPending[-1]["time"]
 
-      # previewSongFormat(tokensToSongFormat(
-      #   currentInput[0][-200:].cpu()
-      # ))
-      # previewSongFormat(tokensToSongFormat(
-      #   clearNotesByInstAndTime(currentInput[0].cpu(), currentDueTime, selectedInstChannel, startTime-0.05, endTime+0.05, quantize=False)
-      # ))
-      # previewSongFormat(tokensToSongFormat(
-      #   addMidiEventToTokenInput(relevantPending[0]["time"], relevantPending[0]["midi"], currentInput[0].cpu(), currentDueTime, quantize=True, duration=duration)
-      # ))
-
       if "addInsteadOfClear" not in statefulModifiers:
         # clear the middle area in currentInput where the notes should be insserted
-        currentInput = clearNotesByInstAndTime(currentInput[0].cpu(), currentDueTime, selectedInstChannel, startTime-0.05, endTime+0.05, quantize=True).cuda().unsqueeze(0)
+        allChannels = False
+        if "removeBeforePrompt" in statefulModifiers:
+          allChannels = True
+        currentInput = clearNotesByInstAndTime(currentInput[0].cpu(), currentDueTime, selectedInstChannel, startTime-0.05, endTime+0.05, quantize=True, allChannels=allChannels).cuda().unsqueeze(0)
         print("Clearing instead of adding")
 
       while len(relevantPending) > 0:
@@ -668,11 +663,14 @@ for i in range(12800):
 
       if "removeBeforePrompt" in statefulModifiers:
         print("Clearing before prompt")
-        currentInput = clearNotesByInstAndTime(currentInput[0].cpu(), currentDueTime, selectedInstChannel, 0,startTime+0.05, quantize=False, allChannels=True).cuda().unsqueeze(0)
+        currentInput = clearNotesByInstAndTime(currentInput[0].cpu(), currentDueTime, selectedInstChannel, 0,startTime, quantize=False, allChannels=True).cuda().unsqueeze(0)
         currentDueTime
         currentInput[0][0]=0 # change first timing token
-        #TODO: this code doesn't work properly
-      if False or ("addInsteadOfClear" not in statefulModifiers):
+        #Experimental
+        # currentInput = torch.cat([torch.LongTensor([tokens[:258]]).cuda(), currentInput], dim=1)
+      # if True or ("addInsteadOfClear" not in statefulModifiers):
+      if "subtleAdd" not in statefulModifiers:
+        print("Clearing extra end of model input")
         # clear to the end. Don't do before because addMidiEventToTokenInput needs an end sentinel.
         # currentInput = clearNotesByInstAndTime(currentInput[0].cpu(), currentDueTime, selectedInstChannel, endTime+0.05, currentDueTime, quantize=False).cuda().unsqueeze(0)
         currentInput = clearNotesByInstAndTime(currentInput[0].cpu(), currentDueTime, selectedInstChannel, endTime, currentDueTime, quantize=False, allChannels=True).cuda().unsqueeze(0)
@@ -701,7 +699,7 @@ for i in range(12800):
 
 
   NO_NOTE_REPEAT_KEY = 42# pad 7
-  CHANGE_SONG_KEY = 43 #pad 8
+  CHANGE_SONG_KEY = -1 #43 #pad 8
 
   modified_logits = logits.clone()
   biasedTokensTemp = temperature
@@ -718,7 +716,7 @@ for i in range(12800):
   if "tempLower" in modifiers:
     biasedTokensTemp = 0.2
   if "tempHigher" in modifiers:
-    biasedTokensTemp = 1.4
+    biasedTokensTemp = 0.9
   if onChaPitchToken:
     # ignore pitch biases for now
     # pitchBiasesMask = torch.sum(pitchBiases[currentlyPressedKorg], axis=0) != 0
@@ -729,8 +727,10 @@ for i in range(12800):
     instBiasesMask = torch.zeros(2831, dtype=torch.bool).cuda()
     for i in range(12):
       if "instCh"+str(i) in modifiers:
-        selectedInstChannel = i
         print("Set selected instrument to", i)
+        selectedInstChannel = i
+        msg = {"type": "selectInst", "inst": selectedInstChannel}
+        asyncio.get_event_loop().create_task(mainWebsocket.send(json.dumps(msg)))
         instBiasesMask = instBiasesMask | (instrumentBiases[i] != 0)
     if torch.sum(instBiasesMask) > 0:
       biasMask = biasMask & instBiasesMask

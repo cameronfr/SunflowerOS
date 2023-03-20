@@ -17,11 +17,12 @@ def ntpTime():
 print(mido.get_input_names())
 print(mido.get_output_names())
 
-# inport0 = mido.open_input("LUMI Keys BLOCK")
-# inport1 = mido.open_input("Arturia MiniLab mkII")
-inport0 = mido.open_input("IAC Driver Bus 1")
+inport0 = mido.open_input("microKEY2 Air KEYBOARD")
+inport1 = mido.open_input("Arturia MiniLab mkII")
+# inport0 = mido.open_input("IAC Driver Bus 1")
 outport0 = mido.open_output("IAC Driver Bus 2")
 # Can use Logic's "External Midi" tracks to deal with forwarding instrument input and output
+# Looks like either logic or Mido is dropping note_off events, it seems like logic is culprit.
 
 msglog = deque()
 msglog.clear()
@@ -35,17 +36,28 @@ outport0.send(msg)
 ws = await websockets.connect("ws://desktop-3vakahr:8889")
 
 print("Start")
-#Rewritten for new version of mido
+selectedInstChannel = 0
 while True:
   msg = None
   msg = inport0.poll()
+  if msg:
+    msg.channel = 0
+  else:
+    msg = inport1.poll()
+    if msg:
+      msg.channel = 1
 
   if msg and msg.type in ["note_on", "note_off"]:
+    # Forward play input to logic on currently selected inst
+    print("Processing inport note", msg)
+    if msg.channel == 0:
+      midoNote = mido.Message(msg.type, channel=selectedInstChannel, note=msg.note, velocity=msg.velocity)
+      outport0.send(midoNote)
+    # Send to server
     fullMessage = {
       "midi": {"type": msg.type, "note": msg.note, "velocity": msg.velocity, "channel": msg.channel},
       "time": ntpTime(),
     }
-    print(ntpTime(),msg)
     await ws.send(json.dumps(fullMessage))
 
   # check if incoming ws message
@@ -67,7 +79,9 @@ while True:
     elif wsMessage["type"] == "clearAllFutureForInst":
       instToClear = wsMessage["inst"]
       curTime = ntpTime()
-      msglog = deque([x for x in msglog if x["msg"].channel != instToClear])
+      msglog = deque([x for x in msglog if (x["msg"].channel != instToClear or x["msg"].type == "note_off")])
+    elif wsMessage["type"] == "selectInst":
+      selectedInstChannel = wsMessage["inst"]
   # sort msglog by due time, since it's not guaranteed to be in order
   msglog = deque(sorted(msglog, key=lambda x: x["due"]))
   while len(msglog) > 0 and msglog[0]["due"] <= ntpTime():
