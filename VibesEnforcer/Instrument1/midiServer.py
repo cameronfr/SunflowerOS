@@ -40,11 +40,11 @@ selectedInstChannel = 0
 while True:
   msg = None
   msg = inport0.poll()
-  if msg:
+  if msg and msg.type in ["note_on", "note_off"]:
     msg.channel = 0
   else:
     msg = inport1.poll()
-    if msg:
+    if msg and msg.type in ["note_on", "note_off"]:
       msg.channel = 1
 
   if msg and msg.type in ["note_on", "note_off"]:

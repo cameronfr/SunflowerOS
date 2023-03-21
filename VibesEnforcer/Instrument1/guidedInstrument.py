@@ -409,7 +409,9 @@ task = asyncio.get_event_loop().create_task(server.serve_forever()) # doesn't pr
 NEW_SONG_TKN = 2816
 
 # testMidi = "/home/cameronfranz/kgSongCC0.mid"
-testMidi = "/home/cameronfranz/kgSongCC0_transposed.mid"
+# testMidi = "/home/cameronfranz/kgSongCC0_transposed.mid"
+testMidi = "/home/cameronfranz/SampleTrainMidi/0a3fcc037ace7b75b8c201478f0c4656.mid"
+# testMidi = "/home/cameronfranz/SampleTrainMidi/0a3fbd254eae9d9d7bae8985e131d493.mid"
 midiBytes = open(testMidi, "rb").read()
 score = TMIDIX.midi2ms_score(midiBytes)
 tokens = scoreToTokens(score) # score object is consumed X.X
@@ -593,7 +595,7 @@ def addMidiEventToTokenInput(eventTime, midiEvent, tokenInput, lastNoteTime, qua
 # if the chords aren't hitting at the same time, need to re-do the ntp time calculation on both ends.
 pendingNotesBuffer = []
 currentlyPressedNotes = []
-temperature=0.7; top_p=0.999; promptLength =256;
+temperature=0.8; top_p=0.999; promptLength =256;
 # temperature=0.8; top_p=0.99; promptLength =256;
 currentDueTime = ntpTime() + 1
 currentNoteTokens = []
@@ -898,7 +900,81 @@ for i in range(128000):
     await asyncio.sleep(0.3)
   await asyncio.sleep(0.0)
 
-previewSongFormat(tokensToSongFormat(currentInput.cpu()[0][promptLength:]))
+
+pendingNotesBuffer = []
+currentlyPressedNotes = []
+currentInput = torch.LongTensor([[]]).cuda()
+currentDueTime = ntpTime()
+iter = 0
+while True:
+  await asyncio.sleep(0.001)
+  pendingPlayNotes = list(filter(lambda x: x["midi"]["channel"] == 0 and x["midi"]["type"] == "note_on", pendingNotesBuffer))
+  if len(pendingPlayNotes) > 0:
+    while len(pendingPlayNotes) > 0:
+      pendingEvent = pendingPlayNotes.pop(0)
+      if pendingEvent["midi"]["type"] == "note_on" and pendingEvent["midi"]["channel"] == 0:
+        # noteOffEvent = list(filter(lambda e: e["midi"]["type"] == "note_off" and e["midi"]["note"] == pendingEvent["midi"]["note"], pendingPlayNotes))[0]
+        # duration = noteOffEvent["time"] - pendingEvent["time"]
+        duration = 0.25
+        pendingEvent["midi"]["channel"] = selectedInstChannel
+        currentInput = addMidiEventToTokenInput(pendingEvent["time"], pendingEvent["midi"], currentInput[0].cpu(), currentDueTime, quantize=False, duration=duration).cuda().unsqueeze(0)
+        currentDueTime = pendingEvent["time"]
+    pendingNotesBuffer = []
+
+    # if currentInput.shape[1] == 0:
+    #   continue
+
+    startIdx = -3*(currentInput[0].shape[0] // 3)
+    currentInput[0][startIdx::3] = torch.clip(currentInput[0][startIdx::3], 0, 127) # clip because addMidiEventToTokenInput uses >2s timings as intermediate step
+
+    modelInputTmp = currentInput.clone()
+    currentDueTimeTmp = currentDueTime #ntpTime()+0.500 #currentDueTime
+    maxTimeAhead = currentDueTimeTmp + 0.26
+    for noteNum in range(2):
+      noteTokens = []
+      for i in range(3):
+        with torch.no_grad():
+          if torch.max(currentInput) >= 2831:
+            print("Invalid token, stopping to preventing CUDA crash")
+            break
+          with torch.cuda.amp.autocast(): #On: 30ms 512, 30ms 1024. Off: 30ms 512, 50ms 1024.
+            logits = model.forward(modelInputTmp[:, -1024:], return_loss=False)[:, -1, :] # remove seq dim
+          if noteNum == 0 and i == 0:
+            logits[0][:15] = -1000 # at least 120ms ahead
+          filtered_logits = top_p_filter(logits[0], top_p).unsqueeze(0) # add batch dim back so we're [batch, num_tokens]
+          probs = F.softmax(filtered_logits / temperatureArr.unsqueeze(0), dim = -1)
+          sampled = torch.multinomial(probs, 1)
+          # if noteNum == 0 and i == 0:
+          #   sampled = torch.LongTensor([[63]]).cuda()
+          modelInputTmp = torch.cat((modelInputTmp, sampled), dim = -1)
+          token = sampled.cpu().item()
+          noteTokens.append(token)
+      note = tokensToNote(noteTokens, model2=False)
+      if note[3] < 12 and note[4] >= 60:
+        deltaTime = note[1] / 1000
+        duration = note[2] / 1000
+        currentDueTimeTmp += deltaTime
+        currentDueTime += deltaTime
+        # note =['note', deltatime, duration, channel, pitch, velocity]
+        # if note[4] >= 60:
+        print("Deltatime is", deltaTime, "duration is", duration, "pitch is", note[4], "velocity is", note[5])
+        currentInput = torch.cat((currentInput, torch.LongTensor([noteTokens]).cuda()), dim = -1)
+        onEvent = ["note_on", currentDueTimeTmp, note[3], note[4], note[5]]
+        offEvent = ["note_off", currentDueTimeTmp+duration, note[3], note[4], note[5]]
+        if note[3] not in [10,  6, 7, 9, 2, 1, 0, 11, 3, 4, 8]:
+          print("Got note on ch", note[3])
+        else:
+          msg = {"type": "notes", "notes": [onEvent, offEvent]}
+          asyncio.get_event_loop().create_task(mainWebsocket.send(json.dumps(msg)))
+      if currentDueTimeTmp > maxTimeAhead:
+        print("ahead of max time, breaking at", n)
+        break
+    # if iter % 10 == 0:
+      # previewSongFormat(tokensToSongFormat(currentInput[0][-1024:].cpu()), audio=False)
+
+
+
+
 
 # can try realtime note accompaniment (e.g. only 2 notes, low temp, automatic as playing). But might not work because needs to really be 120bpm.
 # can also try only allowing notes that are within the currently pressed notes. (i.e. a sort of auto arpeggiator)
