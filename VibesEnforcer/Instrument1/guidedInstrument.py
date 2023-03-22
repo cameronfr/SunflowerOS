@@ -957,7 +957,7 @@ while True:
         # print("Added played note to history", pendingEvent)
         # noteOffEvent = list(filter(lambda e: e["midi"]["type"] == "note_off" and e["midi"]["note"] == pendingEvent["midi"]["note"], pendingPlayNotes))[0]
         # duration = noteOffEvent["time"] - pendingEvent["time"]
-        duration = 0.25
+        duration = 0.5
         pendingEvent["midi"]["channel"] = selectedInstChannel
         currentInput = addMidiEventToTokenInput(pendingEvent["time"], pendingEvent["midi"], currentInput[0].cpu(), currentDueTime, quantize=False, duration=duration).cuda().unsqueeze(0)
         currentDueTime = max(pendingEvent["time"], currentDueTime) # TODO: clean this up lmao
@@ -977,10 +977,11 @@ while True:
       modelInputTmp = currentInput.clone()
       currentDueTimeTmp = currentDueTime #ntpTime()+0.500 #currentDueTime
       # maxTimeAhead = currentDueTimeTmp + 0.26
-      maxTimeAhead = lastPlayedNoteTime + 0.26
+      # maxTimeAhead = lastPlayedNoteTime + 0.26
+      maxTimeAhead = ntpTime() + 0.26*1 # one quarter note at 120bpm
       debug_noteAddedIdxs = []
 
-      for noteNum in range(2):
+      for noteNum in range(3):
         noteTokens = []
         for i in range(3):
           with torch.no_grad():
@@ -1014,7 +1015,7 @@ while True:
             # currentDueTime += deltaTime
             currentDueTime = currentDueTimeTmp # == currentDueTime + totalDelta
             noteTokens[0] = max(0, min((totalDelta*1000) // 8, 127))
-            print("total delta is", totalDelta, "Deltatime is", deltaTime, "duration is", duration, "pitch is", note[4], "velocity is", note[5])
+            print("Adding gen note, total delta is", totalDelta, "Deltatime is", deltaTime, "duration is", duration, "pitch is", note[4], "velocity is", note[5])
             debug_noteAddedIdxs.append(currentInput.shape[1] // 3)
             currentInput = torch.cat((currentInput, torch.LongTensor([noteTokens]).cuda()), dim = -1)
             onEvent = ["note_on", currentDueTimeTmp, note[3], note[4], note[5]]
@@ -1025,10 +1026,11 @@ while True:
               msg = {"type": "notes", "notes": [onEvent, offEvent]}
               asyncio.get_event_loop().create_task(mainWebsocket.send(json.dumps(msg)))
         if currentDueTimeTmp > maxTimeAhead:
-          print("ahead of max time, breaking at", noteNum)
+          print("Ahead of max time, breaking at", noteNum)
           break
     else:
       print("Skipped generation because note was in high region")
+    print("Finished adding gen notes\n")
 
     debug_currentDueTimeAfterGenNotes = currentDueTime
     inputLen = currentInput.shape[1]
@@ -1045,7 +1047,7 @@ while True:
       # previewSongFormat(tokensToSongFormat(currentInput[0][-1024:].cpu()), audio=False)
     currentInputDebugList.append(currentInput.cpu().clone())
 
-for step in debugStepList[-3:]:
+for step in debugStepList[-1:]:
   modelInputBeforeGen = step["modelInputBeforeGen"]
   modelInputAfterGen = step["modelInputAfterGen"]
   addedNoteIdxs = step["addedNoteIdxs"]
@@ -1057,6 +1059,7 @@ for step in debugStepList[-3:]:
   debugGraphScore(score1, title="BeforeGen")
   score2 = tokensToSongFormat(modelInputAfterGen[0][-1024:].cpu())
   debugGraphScore(score2, specialNoteIdxs=addedNoteIdxs, title="AfterGen")
+previewSongFormat(tokensToSongFormat(currentInput[0][-1024:].cpu()), audio=True)
 
 
 
