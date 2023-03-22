@@ -17,6 +17,8 @@ from IPython.display import Audio, display
 from lwa_transformer import *
 import TMIDIX
 
+%config InlineBackend.figure_format = 'svg'
+
 # pc and laptop are 2s apart, so need to sync
 import ntplib
 import time
@@ -901,85 +903,160 @@ for i in range(128000):
   await asyncio.sleep(0.0)
 
 
+def debugGraphScore(score, specialNoteIdxs=[], title="midi"):
+  colors = ['red', 'yellow', 'green', 'cyan', 'blue', 'pink', 'orange', 'purple', 'gray', 'green', 'gold', 'silver']
+  x, y, c, m = [], [], [], []
+
+  for i, s in enumerate(score):
+    x.append(s[1] / 1000)
+    y.append(s[4])
+    if i in specialNoteIdxs:
+      m.append("P")
+      c.append("black")
+    else:
+      m.append("o")
+      c.append(colors[s[3]])
+
+  plt.figure(figsize=(14,12))
+  ax=plt.axes(title=title)
+  ax.set_facecolor('white')
+  # include piano note colored rows
+  for i in range(12,96):
+    plt.axhline(y=i, color='gray', alpha=0.1, linewidth=0.5)
+  # color black keys slightly darker
+  for i in range(12,96):
+    if i % 12 in [1, 3, 6, 8, 10]:
+      plt.axhline(y=i, color='gray', alpha=0.3, linewidth=4)
+  for _x, _y, _c, _m in zip(x,y,c,m):
+    plt.scatter(_x,_y, c=_c, marker=_m, alpha=0.8)
+  # plt.scatter(x,y, c=c, marker=m)
+  plt.xlabel("Time")
+  plt.ylabel("Pitch")
+  plt.show()
+
+debugStepList = []
 pendingNotesBuffer = []
 currentlyPressedNotes = []
 currentInput = torch.LongTensor([[]]).cuda()
 currentDueTime = ntpTime()
-previewSongFormat(tokensToSongFormat(currentInput[0][-1024:].cpu()), audio=True)
+lastPlayedNoteTime = currentDueTime
+# previewSongFormat(tokensToSongFormat(currentInput[0][-1024:].cpu()), audio=True)
 iter = 0
 while True:
   await asyncio.sleep(0.001)
   pendingPlayNotes = list(filter(lambda x: x["midi"]["channel"] == 0 and x["midi"]["type"] == "note_on", pendingNotesBuffer))
   noteWasInHighRegion = False
+  debug_pendingPlayNotes = pendingPlayNotes.copy()
+  debug_currentDueTimeBeforePlayNotes = currentDueTime
   if len(pendingPlayNotes) > 0:
     while len(pendingPlayNotes) > 0:
       pendingEvent = pendingPlayNotes.pop(0)
       if pendingEvent["midi"]["type"] == "note_on" and pendingEvent["midi"]["channel"] == 0:
         if pendingEvent["midi"]["note"] >= 60:
           noteWasInHighRegion = True
-        print("Added played note to history")
+        # print("Added played note to history", pendingEvent)
         # noteOffEvent = list(filter(lambda e: e["midi"]["type"] == "note_off" and e["midi"]["note"] == pendingEvent["midi"]["note"], pendingPlayNotes))[0]
         # duration = noteOffEvent["time"] - pendingEvent["time"]
         duration = 0.25
         pendingEvent["midi"]["channel"] = selectedInstChannel
         currentInput = addMidiEventToTokenInput(pendingEvent["time"], pendingEvent["midi"], currentInput[0].cpu(), currentDueTime, quantize=False, duration=duration).cuda().unsqueeze(0)
-        currentDueTime = pendingEvent["time"]
+        currentDueTime = max(pendingEvent["time"], currentDueTime) # TODO: clean this up lmao
+        lastPlayedNoteTime = pendingEvent["time"]
     pendingNotesBuffer = []
-
-    # if currentInput.shape[1] == 0:
-    #   continue
-    if noteWasInHighRegion:
-      print("note was in high region, skipping")
-      continue
 
     startIdx = -3*(currentInput[0].shape[0] // 3)
     currentInput[0][startIdx::3] = torch.clip(currentInput[0][startIdx::3], 0, 127) # clip because addMidiEventToTokenInput uses >2s timings as intermediate step
 
-    modelInputTmp = currentInput.clone()
-    currentDueTimeTmp = currentDueTime #ntpTime()+0.500 #currentDueTime
-    maxTimeAhead = currentDueTimeTmp + 0.26
-    for noteNum in range(2):
-      noteTokens = []
-      for i in range(3):
-        with torch.no_grad():
-          if torch.max(currentInput) >= 2831:
-            print("Invalid token, stopping to preventing CUDA crash")
-            break
-          with torch.cuda.amp.autocast(): #On: 30ms 512, 30ms 1024. Off: 30ms 512, 50ms 1024.
-            logits = model.forward(modelInputTmp[:, -1024:], return_loss=False)[:, -1, :] # remove seq dim
-          if noteNum == 0 and i == 0:
-            logits[0][:15] = -1000 # at least 120ms ahead
-          filtered_logits = top_p_filter(logits[0], top_p).unsqueeze(0) # add batch dim back so we're [batch, num_tokens]
-          probs = F.softmax(filtered_logits / temperatureArr.unsqueeze(0), dim = -1)
-          sampled = torch.multinomial(probs, 1)
-          # if noteNum == 0 and i == 0:
-          #   sampled = torch.LongTensor([[63]]).cuda()
-          modelInputTmp = torch.cat((modelInputTmp, sampled), dim = -1)
-          token = sampled.cpu().item()
-          noteTokens.append(token)
-      note = tokensToNote(noteTokens, model2=False)
-      if note[3] < 12 and note[4] >= 60:
-        deltaTime = note[1] / 1000
-        duration = note[2] / 1000
-        currentDueTimeTmp += deltaTime
-        currentDueTime += deltaTime
-        # note =['note', deltatime, duration, channel, pitch, velocity]
-        # if note[4] >= 60:
-        print("Deltatime is", deltaTime, "duration is", duration, "pitch is", note[4], "velocity is", note[5])
-        currentInput = torch.cat((currentInput, torch.LongTensor([noteTokens]).cuda()), dim = -1)
-        onEvent = ["note_on", currentDueTimeTmp, note[3], note[4], note[5]]
-        offEvent = ["note_off", currentDueTimeTmp+duration, note[3], note[4], note[5]]
-        if note[3] not in [10,  6, 7, 9, 2, 1, 0, 11, 3, 4, 8]:
-          print("Got note on ch", note[3])
-        else:
-          msg = {"type": "notes", "notes": [onEvent, offEvent]}
-          asyncio.get_event_loop().create_task(mainWebsocket.send(json.dumps(msg)))
-      if currentDueTimeTmp > maxTimeAhead:
-        print("ahead of max time, breaking at", n)
-        break
+    debug_modelInputBeforeGen = currentInput.cpu().clone()
+    debug_currentDueTimeBeforeGenNotes = currentDueTime
+
+    # if currentInput.shape[1] == 0:
+    #   continue
+    if not noteWasInHighRegion:
+
+      modelInputTmp = currentInput.clone()
+      currentDueTimeTmp = currentDueTime #ntpTime()+0.500 #currentDueTime
+      # maxTimeAhead = currentDueTimeTmp + 0.26
+      maxTimeAhead = lastPlayedNoteTime + 0.26
+      debug_noteAddedIdxs = []
+
+      for noteNum in range(2):
+        noteTokens = []
+        for i in range(3):
+          with torch.no_grad():
+            if torch.max(currentInput) >= 2831:
+              print("Invalid token, stopping to preventing CUDA crash")
+              break
+            with torch.cuda.amp.autocast(): #On: 30ms 512, 30ms 1024. Off: 30ms 512, 50ms 1024.
+              logits = model.forward(modelInputTmp[:, -1024:], return_loss=False)[:, -1, :] # remove seq dim
+            if noteNum == 0 and i == 0:
+              print("The last note of modelInput is ahead of right now by", currentDueTime-ntpTime(), "biasing for notes more than", minTimeAheadMs, "ms ahead")
+              # print("The last note of modelInput is ahead of the last played note by", currentDueTime-lastPlayedNoteTime)
+              minTimeAheadMs = max(0, 120 - 1000*(currentDueTime-ntpTime()))
+              logits[0][:int(minTimeAheadMs // 8)] = -1000 # at least 120ms ahead
+              # TODO: this isn't relevant if model ends up predicting a note we play next
+            filtered_logits = top_p_filter(logits[0], top_p).unsqueeze(0) # add batch dim back so we're [batch, num_tokens]
+            probs = F.softmax(filtered_logits / temperatureArr.unsqueeze(0), dim = -1)
+            sampled = torch.multinomial(probs, 1)
+            # if noteNum == 0 and i == 0:
+            #   sampled = torch.LongTensor([[63]]).cuda()
+            modelInputTmp = torch.cat((modelInputTmp, sampled), dim = -1)
+            token = sampled.cpu().item()
+            noteTokens.append(token)
+        note = tokensToNote(noteTokens, model2=False)
+        if note[3] < 12:# and note[4] >= 60:
+          deltaTime = note[1] / 1000
+          duration = note[2] / 1000
+          currentDueTimeTmp += deltaTime
+          # note =['note', deltatime, duration, channel, pitch, velocity]
+          if note[4] >= 60:
+            totalDelta = currentDueTimeTmp - currentDueTime
+            # currentDueTime += deltaTime
+            currentDueTime = currentDueTimeTmp # == currentDueTime + totalDelta
+            noteTokens[0] = max(0, min((totalDelta*1000) // 8, 127))
+            print("total delta is", totalDelta, "Deltatime is", deltaTime, "duration is", duration, "pitch is", note[4], "velocity is", note[5])
+            debug_noteAddedIdxs.append(currentInput.shape[1] // 3)
+            currentInput = torch.cat((currentInput, torch.LongTensor([noteTokens]).cuda()), dim = -1)
+            onEvent = ["note_on", currentDueTimeTmp, note[3], note[4], note[5]]
+            offEvent = ["note_off", currentDueTimeTmp+duration, note[3], note[4], note[5]]
+            if note[3] not in [10,  6, 7, 9, 2, 1, 0, 11, 3, 4, 8]:
+              print("Got note on ch", note[3])
+            else:
+              msg = {"type": "notes", "notes": [onEvent, offEvent]}
+              asyncio.get_event_loop().create_task(mainWebsocket.send(json.dumps(msg)))
+        if currentDueTimeTmp > maxTimeAhead:
+          print("ahead of max time, breaking at", noteNum)
+          break
+    else:
+      print("Skipped generation because note was in high region")
+
+    debug_currentDueTimeAfterGenNotes = currentDueTime
+    inputLen = currentInput.shape[1]
+    debugStepList.append({
+    "currentDueTimeBeforePlayNotes": debug_currentDueTimeBeforePlayNotes,
+    "currentDueTimeBeforeGenNotes": debug_currentDueTimeBeforeGenNotes,
+    "currentDueTimeAfterGenNotes": debug_currentDueTimeAfterGenNotes,
+    "pendingPlayNotes": debug_pendingPlayNotes,
+    "modelInputBeforeGen": debug_modelInputBeforeGen,
+    "modelInputAfterGen": currentInput.cpu().clone(),
+    "addedNoteIdxs": debug_noteAddedIdxs
+    })
     # if iter % 10 == 0:
       # previewSongFormat(tokensToSongFormat(currentInput[0][-1024:].cpu()), audio=False)
+    currentInputDebugList.append(currentInput.cpu().clone())
 
+for step in debugStepList[-3:]:
+  modelInputBeforeGen = step["modelInputBeforeGen"]
+  modelInputAfterGen = step["modelInputAfterGen"]
+  addedNoteIdxs = step["addedNoteIdxs"]
+  print("pending notes are", step["pendingPlayNotes"])
+  print("currentDueTimeBeforePlayNotes is", step["currentDueTimeBeforePlayNotes"])
+  print("currentDueTimeBeforeGenNotes is", step["currentDueTimeBeforeGenNotes"])
+  print("currentDueTimeAfterGenNotes is", step["currentDueTimeAfterGenNotes"])
+  score1 = tokensToSongFormat(modelInputBeforeGen[0][-1024:].cpu())
+  debugGraphScore(score1, title="BeforeGen")
+  score2 = tokensToSongFormat(modelInputAfterGen[0][-1024:].cpu())
+  debugGraphScore(score2, specialNoteIdxs=addedNoteIdxs, title="AfterGen")
 
 
 
