@@ -905,14 +905,19 @@ pendingNotesBuffer = []
 currentlyPressedNotes = []
 currentInput = torch.LongTensor([[]]).cuda()
 currentDueTime = ntpTime()
+previewSongFormat(tokensToSongFormat(currentInput[0][-1024:].cpu()), audio=True)
 iter = 0
 while True:
   await asyncio.sleep(0.001)
   pendingPlayNotes = list(filter(lambda x: x["midi"]["channel"] == 0 and x["midi"]["type"] == "note_on", pendingNotesBuffer))
+  noteWasInHighRegion = False
   if len(pendingPlayNotes) > 0:
     while len(pendingPlayNotes) > 0:
       pendingEvent = pendingPlayNotes.pop(0)
       if pendingEvent["midi"]["type"] == "note_on" and pendingEvent["midi"]["channel"] == 0:
+        if pendingEvent["midi"]["note"] >= 60:
+          noteWasInHighRegion = True
+        print("Added played note to history")
         # noteOffEvent = list(filter(lambda e: e["midi"]["type"] == "note_off" and e["midi"]["note"] == pendingEvent["midi"]["note"], pendingPlayNotes))[0]
         # duration = noteOffEvent["time"] - pendingEvent["time"]
         duration = 0.25
@@ -923,6 +928,9 @@ while True:
 
     # if currentInput.shape[1] == 0:
     #   continue
+    if noteWasInHighRegion:
+      print("note was in high region, skipping")
+      continue
 
     startIdx = -3*(currentInput[0].shape[0] // 3)
     currentInput[0][startIdx::3] = torch.clip(currentInput[0][startIdx::3], 0, 127) # clip because addMidiEventToTokenInput uses >2s timings as intermediate step
