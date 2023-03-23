@@ -957,7 +957,7 @@ while True:
         # print("Added played note to history", pendingEvent)
         # noteOffEvent = list(filter(lambda e: e["midi"]["type"] == "note_off" and e["midi"]["note"] == pendingEvent["midi"]["note"], pendingPlayNotes))[0]
         # duration = noteOffEvent["time"] - pendingEvent["time"]
-        duration = 0.5
+        duration = 2
         pendingEvent["midi"]["channel"] = selectedInstChannel
         currentInput = addMidiEventToTokenInput(pendingEvent["time"], pendingEvent["midi"], currentInput[0].cpu(), currentDueTime, quantize=False, duration=duration).cuda().unsqueeze(0)
         currentDueTime = max(pendingEvent["time"], currentDueTime) # TODO: clean this up lmao
@@ -981,7 +981,10 @@ while True:
       maxTimeAhead = ntpTime() + 0.26*1 # one quarter note at 120bpm
       debug_noteAddedIdxs = []
 
-      for noteNum in range(3):
+      for noteNum in range(5):
+        if currentDueTimeTmp > maxTimeAhead:
+          print("Ahead of max time, breaking at", noteNum)
+          break
         noteTokens = []
         for i in range(3):
           with torch.no_grad():
@@ -990,17 +993,16 @@ while True:
               break
             with torch.cuda.amp.autocast(): #On: 30ms 512, 30ms 1024. Off: 30ms 512, 50ms 1024.
               logits = model.forward(modelInputTmp[:, -1024:], return_loss=False)[:, -1, :] # remove seq dim
-            if noteNum == 0 and i == 0:
+            # if noteNum == 0 and i == 0:
+            if i == 0:
               print("The last note of modelInput is ahead of right now by", currentDueTime-ntpTime(), "biasing for notes more than", minTimeAheadMs, "ms ahead")
               # print("The last note of modelInput is ahead of the last played note by", currentDueTime-lastPlayedNoteTime)
-              minTimeAheadMs = max(0, 120 - 1000*(currentDueTime-ntpTime()))
-              logits[0][:int(minTimeAheadMs // 8)] = -1000 # at least 120ms ahead
+              minTimeAheadMs = max(0, 50 - 1000*(currentDueTime-ntpTime()))
+              # logits[0][:int(minTimeAheadMs // 8)] = -1000 # at least 120ms ahead
               # TODO: this isn't relevant if model ends up predicting a note we play next
             filtered_logits = top_p_filter(logits[0], top_p).unsqueeze(0) # add batch dim back so we're [batch, num_tokens]
             probs = F.softmax(filtered_logits / temperatureArr.unsqueeze(0), dim = -1)
             sampled = torch.multinomial(probs, 1)
-            # if noteNum == 0 and i == 0:
-            #   sampled = torch.LongTensor([[63]]).cuda()
             modelInputTmp = torch.cat((modelInputTmp, sampled), dim = -1)
             token = sampled.cpu().item()
             noteTokens.append(token)
@@ -1025,9 +1027,6 @@ while True:
             else:
               msg = {"type": "notes", "notes": [onEvent, offEvent]}
               asyncio.get_event_loop().create_task(mainWebsocket.send(json.dumps(msg)))
-        if currentDueTimeTmp > maxTimeAhead:
-          print("Ahead of max time, breaking at", noteNum)
-          break
     else:
       print("Skipped generation because note was in high region")
     print("Finished adding gen notes\n")
