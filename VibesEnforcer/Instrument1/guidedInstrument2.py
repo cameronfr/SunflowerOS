@@ -35,8 +35,14 @@ async def handler(websocket, path):
     data = await websocket.recv()
     noteData = json.loads(data)
     onNoteData(noteData)
-server = await websockets.serve(handler, "0.0.0.0", 8889, ping_timeout=None)
-task = asyncio.get_event_loop().create_task(server.serve_forever()) # doesn't print stdout or errors for some reason :/. Sometimes Need to await task to debug.
+server = None
+async def restartMidiServer():
+  global server
+  if server is not None:
+    server.close()
+  server = await websockets.serve(handler, "0.0.0.0", 8889, ping_timeout=None)
+  task = asyncio.get_event_loop().create_task(server.serve_forever()) # doesn't print stdout or errors for some reason :/. Sometimes Need to await task to debug.
+await restartMidiServer()
 
 # Time Syncing. PC and Laptop are 2s apart, so need to sync
 import ntplib
@@ -351,6 +357,7 @@ def timeFmtToTokens(timeFmt):
 
   tokens[0] = 0 #startDelta // 8
   tokens[3::3] = (timeFmt[1:, 0] - timeFmt[:-1, 0]).squeeze() // 8
+  tokens[3::3] = torch.clip(tokens[3::3], 0, 127)
   # dur_vel
   tokens[1::3] = 128 + \
     8 * (torch.clip(timeFmt[:, 1] // 16, 1, 127)) + \
@@ -367,7 +374,6 @@ def debugGraphTimeFmt(score, specialNoteIdxs=[], title="midi"):
   x, y, c, m = [], [], [], []
 
   for i, s in enumerate(score):
-    print(s[0])
     x.append((s[0] - score[0, 0]) / 1000)
     y.append(s[3])
     if i in specialNoteIdxs:
@@ -435,35 +441,82 @@ def addTimeFmtNoteToTimeline(timeline, note):
 
 
 debugGraphTimeFmt(timeline)
-# interesting when don't add gen notes to timeline
-timeline = torch.LongTensor(0, 5)
+previewScoreFmt(tokensToScoreFmt(timeFmtToTokens(timeline)))
+# TODO: model should be able to get this chord+descending thing down.
+# TODO: why double notes? / the slighly jank timings on the responses.
+# TODO: quantize 120bpm?
+# TODO: why is it hard to introduce / use other instruments effectively? muting/response region wrong?
+# TODO: prob need to mute both regions when have both hands on stuff. Maybe keep muting that region when the notes are still being held.
+#TODO: I think double notes cause model to spiral
+
 pendingNotesBuffer = []
+controlNotesPressed = []
+selectedInstChannel = 0
 def onNoteData(noteData):
+  global selectedInstChannel
   pendingNotesBuffer.append(noteData)
+  if noteData["midi"]["type"] == "note_on" and noteData["midi"]["channel"] == 1:
+    pitch = noteData["midi"]["note"]
+    controlNotesPressed.append(pitch)
+    if pitch in range(48, 60):
+      selectedInstChannel = pitch - 48
+      msg = {"type": "selectInst", "inst": selectedInstChannel}
+      asyncio.get_event_loop().create_task(mainWebsocket.send(json.dumps(msg)))
+  if noteData["midi"]["type"] == "note_off" and noteData["midi"]["channel"] == 1:
+    pitch = noteData["midi"]["note"]
+    if pitch in controlNotesPressed:
+      controlNotesPressed.remove(pitch)
+# await restartMidiServer()
+
+syncNTP()
+timeline = torch.LongTensor(0, 5)
 iter = 0
-temperature=0.8; top_p=0.99; promptLength =256;
+# pad1-36: disable reponse gen everywhere | pad2-37: generate without input | pad3-38 -- response region lows | pad4-39: reponse region everywhere
+temperature=0.7; top_p=0.99;
 while True:
   await asyncio.sleep(0.001)
+  responseRegion = list(range(60, 128))
+  if 38 in controlNotesPressed:
+    responseRegion = list(range(0, 60))
+  elif 39 in controlNotesPressed:
+    responseRegion = list(range(0, 128))
   pendingPlayNotes = list(filter(lambda x: x["midi"]["channel"] == 0 and x["midi"]["type"] == "note_on", pendingNotesBuffer))
-  noteWasInHighRegion = False
-  if len(pendingPlayNotes) > 0:
-    while len(pendingPlayNotes) > 0:
-      midiEvent = pendingPlayNotes.pop(0)
-      if midiEvent["midi"]["type"] == "note_on" and midiEvent["midi"]["channel"] == 0:
-        if midiEvent["midi"]["note"] >= 60:
-          noteWasInHighRegion = True
-        duration = 2000
-        selectedInstChannel = 0
-        note = [int(midiEvent["time"]*1000), duration, selectedInstChannel, midiEvent["midi"]["note"], midiEvent["midi"]["velocity"]]
+  userPlayedNoteInResponseRegion = False
+  if len(pendingPlayNotes) > 0 or (37 in controlNotesPressed):
+    if len(pendingPlayNotes) > 0:
+      aheadNotes = timeline[:, 0] > (pendingPlayNotes[0]["time"] * 1000) + 50 # clear notes more than 20ms ahead
+      print("Cleared", torch.sum(aheadNotes), "ahead notes")
+      timeline = timeline[~aheadNotes]
+      while len(pendingPlayNotes) > 0:
+        midiEvent = pendingPlayNotes.pop(0)
+        if midiEvent["midi"]["type"] == "note_on" and midiEvent["midi"]["channel"] == 0:
+          # if midiEvent["midi"]["note"] in responseRegion:
+            # userPlayedNoteInResponseRegion = True
+          pitch = midiEvent["midi"]["note"]
+          # don't gen notes in 2-octave block
+          responseRegionInv = list(range(12 + 24 * ((pitch - 12)// 24), 36 + 24 * ((pitch - 12)// 24)))
+          responseRegion = list(set(range(0,128)) - set(responseRegionInv))
+          duration = int(1900+ random.random() * 200 - 100)
+          note = [int(midiEvent["time"]*1000), duration, selectedInstChannel, midiEvent["midi"]["note"], midiEvent["midi"]["velocity"]]
 
-        timeline = addTimeFmtNoteToTimeline(timeline, note)
-    pendingNotesBuffer = []
+          timeline = addTimeFmtNoteToTimeline(timeline, note)
+      pendingNotesBuffer = []
 
-    if not noteWasInHighRegion:
-      maxTimeAhead = ntpTime() + 0.26*1 # one quarter note at 120bpm
+    if (not userPlayedNoteInResponseRegion) and (not 36 in controlNotesPressed):
+      maxTimeAhead = ntpTime() + 0.26*4 # one quarter note at 120bpm
       modelInputTokens = timeFmtToTokens(timeline).unsqueeze(0).cuda()
       timelineAddition = []
-      for noteNum in range(5):
+      for noteNum in range(8):
+        await asyncio.sleep(0.001)
+        frontierNote = timeline[-1] if noteNum == 0 else timelineAddition[-1]
+        # be careful with dividing longs in pytorch -- unintuitive
+        if (frontierNote[0].item() / 1000) > maxTimeAhead:
+          print("Ahead of max time, breaking at", noteNum)
+          break
+        pendingPlayNotes = list(filter(lambda x: x["midi"]["channel"] == 0 and x["midi"]["type"] == "note_on", pendingNotesBuffer))
+        if len(pendingPlayNotes) > 0:
+          print("Have pending notes, breaking at", noteNum)
+          break
         noteTokens = []
         for i in range(3):
           with torch.no_grad():
@@ -472,11 +525,12 @@ while True:
                 print("Invalid token, stopping to preventing CUDA crash")
                 break
               logits = model.forward(modelInputTokens[:, -1024:], return_loss=False)[:, -1, :] # remove seq dim
-            # if i == 0:
-              # print("The last note of modelInput is ahead of right now by", currentDueTime-ntpTime(), "biasing for notes more than", minTimeAheadMs, "ms ahead")
+            if i == 0:
+              currentDueTime = frontierNote[0].item() / 1000
+              minTimeAheadMs = min(1000, max(0, 100 - 1000*(currentDueTime-ntpTime()))) # it takes approx 33*3 for one note
+              print("The last note of modelInput is ahead of right now by", currentDueTime-ntpTime(), "biasing for notes more than", minTimeAheadMs, "ms ahead")
               # print("The last note of modelInput is ahead of the last played note by", currentDueTime-lastPlayedNoteTime)
-              # minTimeAheadMs = max(0, 50 - 1000*(currentDueTime-ntpTime()))
-              # logits[0][:int(minTimeAheadMs // 8)] = -1000 # at least 120ms ahead
+              logits[0][:int(minTimeAheadMs // 8)] = -1000 # at least 120ms ahead
               # TODO: this isn't relevant if model ends up predicting a note we play next
             filtered_logits = topPFilter(logits[0], top_p).unsqueeze(0) # add batch dim back so we're [batch, num_tokens]
             probs = F.softmax(filtered_logits / temperature, dim = -1)
@@ -491,21 +545,18 @@ while True:
         else:
           note[0] = timelineAddition[-1][0] + delta
         timelineAddition.append(note)
-
-        if timelineAddition[-1][0] / 1000 > maxTimeAhead:
-          print("Ahead of max time, breaking at", noteNum)
-          break
       for note in timelineAddition:
-        if note[2] < 12 and note[3] >= 60:
-            print("Adding gen note", note)
-            absTime=note[0].item()/1000; dur=note[1].item()/1000; channel=note[2].item(); pitch=note[3].item(); vel=note[4].item()
-            onEvent = ["note_on", absTime, channel, pitch, vel]
-            offEvent = ["note_on", absTime+dur, channel, pitch, vel]
-            if note[2] not in [10,  6, 7, 9, 2, 1, 0, 11, 3, 4, 8]:
-              print("Got note on unknown ch", note[3])
-            else:
-              msg = {"type": "notes", "notes": [onEvent, offEvent]}
-              asyncio.get_event_loop().create_task(mainWebsocket.send(json.dumps(msg)))
+        if note[2] < 12 and (note[3] in responseRegion or note[2] != selectedInstChannel) and (note[0].item()/1000.0 > ntpTime()):
+          timeline = addTimeFmtNoteToTimeline(timeline, note)
+          print("Adding gen note to timeline, and playing", note.tolist())
+          absTime=note[0].item()/1000; dur=note[1].item()/1000; channel=note[2].item(); pitch=note[3].item(); vel=note[4].item()
+          onEvent = ["note_on", absTime, channel, pitch, vel]
+          offEvent = ["note_off", absTime+dur, channel, pitch, vel]
+          if note[2] not in [10,  6, 7, 9, 2, 1, 0, 11, 3, 4, 8]:
+            print("Got note on unknown ch", note[3])
+          else:
+            msg = {"type": "notes", "notes": [onEvent, offEvent]}
+            asyncio.get_event_loop().create_task(mainWebsocket.send(json.dumps(msg)))
     else:
-      print("Skipped generation because note was in high region")
+      print("Skipped generation because note was in high region or controlNote")
     print("Finished adding gen notes\n")
