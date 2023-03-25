@@ -394,7 +394,7 @@ def debugGraphTimeFmt(score, specialNoteIdxs=[], title="midi"):
     if i % 12 in [1, 3, 6, 8, 10]:
       plt.axhline(y=i, color='gray', alpha=0.3, linewidth=4)
   # for _x, _y, _c, _m in zip(x,y,c,m):
-  plt.scatter(x,y, c=c, alpha=0.8)
+  plt.scatter(x,y, c=c, alpha=0.5)
   # plt.scatter(x,y, c=c, marker=m)
   plt.xlabel("Time")
   plt.ylabel("Pitch")
@@ -432,15 +432,21 @@ def addTimeFmtNoteToTimeline(timeline, note):
     insertLocation = timeline.shape[0]
   else:
     insertLocation = insertLocation[0].item()
+
+  duplicateTimeThresh = 150
+  nearbyNotes = timeline[torch.abs(timeline[:, 0]-note[0]) < duplicateTimeThresh]
+  duplicatesMask = (nearbyNotes[:, 2] == note[2]) & (nearbyNotes[:, 3] == note[3])
+  if torch.sum(duplicatesMask) > 0:
+    print("Duplicate note (or, within 150), not inserting") # this thresh will also prevent 1/16th note spam of same note, unforunately
+    return timeline
+
   newTimeline = torch.zeros((timeline.shape[0]+1, timeline.shape[1]), dtype=torch.long)
   newTimeline[:insertLocation] = timeline[:insertLocation]
   newTimeline[insertLocation] = torch.LongTensor(note)
   newTimeline[insertLocation+1:] = timeline[insertLocation:]
   return newTimeline
 
-
-
-debugGraphTimeFmt(timeline)
+debugGraphTimeFmt(timeline[-30:])
 previewScoreFmt(tokensToScoreFmt(timeFmtToTokens(timeline)))
 # TODO: model should be able to get this chord+descending thing down.
 # TODO: why double notes? / the slighly jank timings on the responses.
@@ -472,34 +478,46 @@ syncNTP()
 timeline = torch.LongTensor(0, 5)
 iter = 0
 # pad1-36: disable reponse gen everywhere | pad2-37: generate without input | pad3-38 -- response region lows | pad4-39: reponse region everywhere
-temperature=0.7; top_p=0.99;
+temperature=0.8; top_p=0.99;
+userRecentlyPlayedNotesList = []
+responseRegion = list(range(60, 128)) + list(range(0, 36))
 while True:
   await asyncio.sleep(0.001)
-  responseRegion = list(range(60, 128))
-  if 38 in controlNotesPressed:
-    responseRegion = list(range(0, 60))
-  elif 39 in controlNotesPressed:
-    responseRegion = list(range(0, 128))
+  # responseRegion = list(range(60, 128)) + list(range(0, 36))
+  # if 38 in controlNotesPressed:
+  #   responseRegion = list(range(0, 60))
+  # elif 39 in controlNotesPressed:
+  #   responseRegion = list(range(0, 128))
   pendingPlayNotes = list(filter(lambda x: x["midi"]["channel"] == 0 and x["midi"]["type"] == "note_on", pendingNotesBuffer))
   userPlayedNoteInResponseRegion = False
   if len(pendingPlayNotes) > 0 or (37 in controlNotesPressed):
     if len(pendingPlayNotes) > 0:
-      aheadNotes = timeline[:, 0] > (pendingPlayNotes[0]["time"] * 1000) + 50 # clear notes more than 20ms ahead
-      print("Cleared", torch.sum(aheadNotes), "ahead notes")
-      timeline = timeline[~aheadNotes]
+      # aheadNotes = timeline[:, 0] > (int(pendingPlayNotes[0]["time"] * 1000)) + 50 # clear notes more than 0ms ahead
+      # timeline = timeline[~aheadNotes]
+      # print("Cleared", torch.sum(aheadNotes), "ahead notes")
+      # Clearing ahead is good when want played notes to have big effect. But if playing low notes, and that clears upper frontier, will kill off stuff going on up there.
       while len(pendingPlayNotes) > 0:
         midiEvent = pendingPlayNotes.pop(0)
         if midiEvent["midi"]["type"] == "note_on" and midiEvent["midi"]["channel"] == 0:
-          # if midiEvent["midi"]["note"] in responseRegion:
-            # userPlayedNoteInResponseRegion = True
-          pitch = midiEvent["midi"]["note"]
+          if midiEvent["midi"]["note"] in responseRegion:
+            userPlayedNoteInResponseRegion = True
           # don't gen notes in 2-octave block
-          responseRegionInv = list(range(12 + 24 * ((pitch - 12)// 24), 36 + 24 * ((pitch - 12)// 24)))
-          responseRegion = list(set(range(0,128)) - set(responseRegionInv))
           duration = int(1900+ random.random() * 200 - 100)
           note = [int(midiEvent["time"]*1000), duration, selectedInstChannel, midiEvent["midi"]["note"], midiEvent["midi"]["velocity"]]
-
+          print("Adding played note", note)
           timeline = addTimeFmtNoteToTimeline(timeline, note)
+
+          # userRecentlyPlayedNotesList.append(note)
+          # userRecentlyPlayedNotes = torch.LongTensor(userRecentlyPlayedNotesList[-30:])
+          # pitches = userRecentlyPlayedNotes[abs(userRecentlyPlayedNotes[:, 0]-int(ntpTime()*1000)) < 2100][:, 3]
+          # responseRegionInv = set()
+          # for p in pitches:
+          #   responseRegionInv = set(range(p -12, p+12)).union(responseRegionInv)
+          pitch = note[3]
+          responseRegionInv = list(range(12 + 24 * ((pitch - 12)// 24), 36 + 24 * ((pitch - 12)// 24)))
+          responseRegion = list(set(range(0,128)) - set(responseRegionInv))
+          print("Blocked-from-response area size is", len(responseRegionInv))
+
       pendingNotesBuffer = []
 
     if (not userPlayedNoteInResponseRegion) and (not 36 in controlNotesPressed):
@@ -508,6 +526,7 @@ while True:
       timelineAddition = []
       for noteNum in range(8):
         await asyncio.sleep(0.001)
+
         frontierNote = timeline[-1] if noteNum == 0 else timelineAddition[-1]
         # be careful with dividing longs in pytorch -- unintuitive
         if (frontierNote[0].item() / 1000) > maxTimeAhead:
@@ -546,7 +565,8 @@ while True:
           note[0] = timelineAddition[-1][0] + delta
         timelineAddition.append(note)
       for note in timelineAddition:
-        if note[2] < 12 and (note[3] in responseRegion or note[2] != selectedInstChannel) and (note[0].item()/1000.0 > ntpTime()):
+        withinTime = note[0].item()/1000.0 > ntpTime()
+        if note[2] < 12 and (note[3] in responseRegion or note[2] != selectedInstChannel) and withinTime:
           timeline = addTimeFmtNoteToTimeline(timeline, note)
           print("Adding gen note to timeline, and playing", note.tolist())
           absTime=note[0].item()/1000; dur=note[1].item()/1000; channel=note[2].item(); pitch=note[3].item(); vel=note[4].item()
@@ -557,6 +577,9 @@ while True:
           else:
             msg = {"type": "notes", "notes": [onEvent, offEvent]}
             asyncio.get_event_loop().create_task(mainWebsocket.send(json.dumps(msg)))
+        else:
+          if not withinTime:
+            print("Note not added or played because it would play too late")
     else:
       print("Skipped generation because note was in high region or controlNote")
     print("Finished adding gen notes\n")
