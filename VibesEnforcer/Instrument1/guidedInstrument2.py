@@ -446,8 +446,8 @@ def addTimeFmtNoteToTimeline(timeline, note):
   newTimeline[insertLocation+1:] = timeline[insertLocation:]
   return newTimeline
 
-debugGraphTimeFmt(timeline[-30:])
-previewScoreFmt(tokensToScoreFmt(timeFmtToTokens(timeline)))
+debugGraphTimeFmt(timeline[-60:])
+previewScoreFmt(tokensToScoreFmt(timeFmtToTokens(timeline[:])))
 # TODO: model should be able to get this chord+descending thing down.
 # TODO: why double notes? / the slighly jank timings on the responses.
 # TODO: quantize 120bpm?
@@ -478,16 +478,16 @@ syncNTP()
 timeline = torch.LongTensor(0, 5)
 iter = 0
 # pad1-36: disable reponse gen everywhere | pad2-37: generate without input | pad3-38 -- response region lows | pad4-39: reponse region everywhere
-temperature=0.8; top_p=0.99;
+temperature=0.7; top_p=0.99;
 userRecentlyPlayedNotesList = []
 responseRegion = list(range(60, 128)) + list(range(0, 36))
 while True:
   await asyncio.sleep(0.001)
   # responseRegion = list(range(60, 128)) + list(range(0, 36))
-  # if 38 in controlNotesPressed:
-  #   responseRegion = list(range(0, 60))
-  # elif 39 in controlNotesPressed:
-  #   responseRegion = list(range(0, 128))
+  if 38 in controlNotesPressed:
+    responseRegion = list(range(0, 60))
+  elif 39 in controlNotesPressed:
+    responseRegion = list(range(0, 128))
   pendingPlayNotes = list(filter(lambda x: x["midi"]["channel"] == 0 and x["midi"]["type"] == "note_on", pendingNotesBuffer))
   userPlayedNoteInResponseRegion = False
   if len(pendingPlayNotes) > 0 or (37 in controlNotesPressed):
@@ -549,7 +549,7 @@ while True:
               minTimeAheadMs = min(1000, max(0, 100 - 1000*(currentDueTime-ntpTime()))) # it takes approx 33*3 for one note
               print("The last note of modelInput is ahead of right now by", currentDueTime-ntpTime(), "biasing for notes more than", minTimeAheadMs, "ms ahead")
               # print("The last note of modelInput is ahead of the last played note by", currentDueTime-lastPlayedNoteTime)
-              logits[0][:int(minTimeAheadMs // 8)] = -1000 # at least 120ms ahead
+              logits[0][:int(minTimeAheadMs // 8)] = -1000
               # TODO: this isn't relevant if model ends up predicting a note we play next
             filtered_logits = topPFilter(logits[0], top_p).unsqueeze(0) # add batch dim back so we're [batch, num_tokens]
             probs = F.softmax(filtered_logits / temperature, dim = -1)
@@ -565,7 +565,7 @@ while True:
           note[0] = timelineAddition[-1][0] + delta
         timelineAddition.append(note)
       for note in timelineAddition:
-        withinTime = note[0].item()/1000.0 > ntpTime()
+        withinTime = note[0].item()/1000.0 > ntpTime() + 0.02
         if note[2] < 12 and (note[3] in responseRegion or note[2] != selectedInstChannel) and withinTime:
           timeline = addTimeFmtNoteToTimeline(timeline, note)
           print("Adding gen note to timeline, and playing", note.tolist())
