@@ -438,16 +438,16 @@ def addTimeFmtNoteToTimeline(timeline, note):
   duplicatesMask = (nearbyNotes[:, 2] == note[2]) & (nearbyNotes[:, 3] == note[3])
   if torch.sum(duplicatesMask) > 0:
     print("Duplicate note (or, within 150), not inserting") # this thresh will also prevent 1/16th note spam of same note, unforunately
-    return timeline
+    return timeline, -1
 
   newTimeline = torch.zeros((timeline.shape[0]+1, timeline.shape[1]), dtype=torch.long)
   newTimeline[:insertLocation] = timeline[:insertLocation]
   newTimeline[insertLocation] = torch.LongTensor(note)
   newTimeline[insertLocation+1:] = timeline[insertLocation:]
-  return newTimeline
+  return newTimeline, insertLocation
 
 debugGraphTimeFmt(timeline[-60:])
-previewScoreFmt(tokensToScoreFmt(timeFmtToTokens(timeline[:])))
+previewScoreFmt(tokensToScoreFmt(timeFmtToTokens(timeline[:])), audio=False)
 # TODO: model should be able to get this chord+descending thing down.
 # TODO: why double notes? / the slighly jank timings on the responses.
 # TODO: quantize 120bpm?
@@ -481,6 +481,8 @@ iter = 0
 temperature=0.7; top_p=0.99;
 userRecentlyPlayedNotesList = []
 responseRegion = list(range(60, 128)) + list(range(0, 36))
+unfinishedNotes = {} # pitch : idx -- ignornig chan for now
+pendingNotesBuffer = []
 while True:
   await asyncio.sleep(0.001)
   # responseRegion = list(range(60, 128)) + list(range(0, 36))
@@ -488,7 +490,7 @@ while True:
     responseRegion = list(range(0, 60))
   elif 39 in controlNotesPressed:
     responseRegion = list(range(0, 128))
-  pendingPlayNotes = list(filter(lambda x: x["midi"]["channel"] == 0 and x["midi"]["type"] == "note_on", pendingNotesBuffer))
+  pendingPlayNotes = list(filter(lambda x: x["midi"]["channel"] == 0 and (x["midi"]["type"] == "note_on" or x["midi"]["type"] == "note_off"), pendingNotesBuffer))
   userPlayedNoteInResponseRegion = False
   if len(pendingPlayNotes) > 0 or (37 in controlNotesPressed):
     if len(pendingPlayNotes) > 0:
@@ -498,14 +500,23 @@ while True:
       # Clearing ahead is good when want played notes to have big effect. But if playing low notes, and that clears upper frontier, will kill off stuff going on up there.
       while len(pendingPlayNotes) > 0:
         midiEvent = pendingPlayNotes.pop(0)
-        if midiEvent["midi"]["type"] == "note_on" and midiEvent["midi"]["channel"] == 0:
+        if midiEvent["midi"]["type"] == "note_off":
+          noteIdx = unfinishedNotes[midiEvent["midi"]["note"]]
+          note = timeline[noteIdx]
+          duration = int(midiEvent["time"] * 1000) - note[0]
+          timeline[noteIdx][1] = duration
+          print("Updated duration to", duration)
+          del unfinishedNotes[midiEvent["midi"]["note"]]
+        if midiEvent["midi"]["type"] == "note_on":
           if midiEvent["midi"]["note"] in responseRegion:
             userPlayedNoteInResponseRegion = True
-          # don't gen notes in 2-octave block
-          duration = int(1900+ random.random() * 200 - 100)
-          note = [int(midiEvent["time"]*1000), duration, selectedInstChannel, midiEvent["midi"]["note"], midiEvent["midi"]["velocity"]]
+          duration = torch.mean(timeline[-16:, 1].to(torch.float16))
+          if timeline.shape[0] == 0:
+            duration = 500
+          note = [int(midiEvent["time"]*1000), int(duration), selectedInstChannel, midiEvent["midi"]["note"], midiEvent["midi"]["velocity"]]
           print("Adding played note", note)
-          timeline = addTimeFmtNoteToTimeline(timeline, note)
+          timeline, insertLocation = addTimeFmtNoteToTimeline(timeline, note)
+          unfinishedNotes[note[3]] = insertLocation
 
           # userRecentlyPlayedNotesList.append(note)
           # userRecentlyPlayedNotes = torch.LongTensor(userRecentlyPlayedNotesList[-30:])
@@ -567,7 +578,7 @@ while True:
       for note in timelineAddition:
         withinTime = note[0].item()/1000.0 > ntpTime() + 0.02
         if note[2] < 12 and (note[3] in responseRegion or note[2] != selectedInstChannel) and withinTime:
-          timeline = addTimeFmtNoteToTimeline(timeline, note)
+          timeline, _ = addTimeFmtNoteToTimeline(timeline, note)
           print("Adding gen note to timeline, and playing", note.tolist())
           absTime=note[0].item()/1000; dur=note[1].item()/1000; channel=note[2].item(); pitch=note[3].item(); vel=note[4].item()
           onEvent = ["note_on", absTime, channel, pitch, vel]
