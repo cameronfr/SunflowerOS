@@ -477,62 +477,88 @@ def onNoteData(noteData):
 syncNTP()
 timeline = torch.LongTensor(0, 5)
 iter = 0
-# pad1-36: disable reponse gen everywhere | pad2-37: generate without input | pad3-38 -- response region lows | pad4-39: reponse region everywhere
+# pad1-36: disable reponse gen everywhere | pad2-37: generate without input | pad3-38 -- response region lows | pad4-39: reponse region everywhere | pad5-40 -- ignore input | pad6-41 -- insert at frontier | pad7-42  | pad8-43 -- clear current input
 temperature=0.7; top_p=0.99;
+# temperature=0.8; top_p=0.999;
 userRecentlyPlayedNotesList = []
 responseRegion = list(range(60, 128)) + list(range(0, 36))
 unfinishedNotes = {} # pitch : idx -- ignornig chan for now
 pendingNotesBuffer = []
 while True:
   await asyncio.sleep(0.001)
-  # responseRegion = list(range(60, 128)) + list(range(0, 36))
-  if 38 in controlNotesPressed:
-    responseRegion = list(range(0, 60))
-  elif 39 in controlNotesPressed:
-    responseRegion = list(range(0, 128))
   pendingPlayNotes = list(filter(lambda x: x["midi"]["channel"] == 0 and (x["midi"]["type"] == "note_on" or x["midi"]["type"] == "note_off"), pendingNotesBuffer))
   userPlayedNoteInResponseRegion = False
-  if len(pendingPlayNotes) > 0 or (37 in controlNotesPressed):
+  if (43 in controlNotesPressed and addedNoteIdx == 0):
+    print("Resetting timeline / prompt")
+    timeline = torch.LongTensor(0, 5)
+    unfinishedNotes = {}
+    controlNotesPressed.remove(43) # special -- make it not toggle
+  hasEnoughNotesWhenStarting = (timeline.shape[0] == 0 and (len(pendingPlayNotes) > 3)) or (timeline.shape[0] != 0)
+  if (len(pendingPlayNotes) > 0 or (37 in controlNotesPressed)) and hasEnoughNotesWhenStarting:
     if len(pendingPlayNotes) > 0:
-      # aheadNotes = timeline[:, 0] > (int(pendingPlayNotes[0]["time"] * 1000)) + 50 # clear notes more than 0ms ahead
-      # timeline = timeline[~aheadNotes]
-      # print("Cleared", torch.sum(aheadNotes), "ahead notes")
-      # Clearing ahead is good when want played notes to have big effect. But if playing low notes, and that clears upper frontier, will kill off stuff going on up there.
-      while len(pendingPlayNotes) > 0:
+      if (41 in controlNotesPressed):
+        aheadNotes = timeline[:, 0] > (int(pendingPlayNotes[0]["time"] * 1000)) + 0 # clear notes more than 0ms ahead
+        timeline = timeline[~aheadNotes]
+        print("Cleared", torch.sum(aheadNotes), "ahead notes")
+        if (torch.sum(aheadNotes) > 0):
+          msg = {"type": "clearAllFutureForInst", "inst": -1}
+          asyncio.get_event_loop().create_task(mainWebsocket.send(json.dumps(msg)))
+        # Clearing ahead is good when want played notes to have big effect. But removes chance of playing "with" the model
+      addedNoteIdx = 0
+      while len(pendingPlayNotes) > 0 and not (40 in controlNotesPressed):
         midiEvent = pendingPlayNotes.pop(0)
         if midiEvent["midi"]["type"] == "note_off":
-          noteIdx = unfinishedNotes[midiEvent["midi"]["note"]]
-          note = timeline[noteIdx]
-          duration = int(midiEvent["time"] * 1000) - note[0]
-          timeline[noteIdx][1] = duration
-          print("Updated duration to", duration)
-          del unfinishedNotes[midiEvent["midi"]["note"]]
+          pitch = midiEvent["midi"]["note"]
+          if pitch in unfinishedNotes:
+            noteIdx = unfinishedNotes[pitch]
+            note = timeline[noteIdx]
+            duration = int(midiEvent["time"] * 1000) - note[0]
+            timeline[noteIdx][1] = duration
+            print("Updated duration to", duration)
+            del unfinishedNotes[midiEvent["midi"]["note"]]
         if midiEvent["midi"]["type"] == "note_on":
-          if midiEvent["midi"]["note"] in responseRegion:
-            userPlayedNoteInResponseRegion = True
-          duration = torch.mean(timeline[-16:, 1].to(torch.float16))
+          # if midiEvent["midi"]["note"] in responseRegion and (not 42 in controlNotesPressed):
+          #   userPlayedNoteInResponseRegion = True
+          duration = torch.mean(timeline[-16:, 1].to(torch.float))
           if timeline.shape[0] == 0:
             duration = 500
           note = [int(midiEvent["time"]*1000), int(duration), selectedInstChannel, midiEvent["midi"]["note"], midiEvent["midi"]["velocity"]]
           print("Adding played note", note)
           timeline, insertLocation = addTimeFmtNoteToTimeline(timeline, note)
-          unfinishedNotes[note[3]] = insertLocation
+          if insertLocation != -1:
+            unfinishedNotes[note[3]] = insertLocation
+            addedNoteIdx += 1
 
+          # Strat 1: +- 12 notes on all recently played keys.
           # userRecentlyPlayedNotesList.append(note)
           # userRecentlyPlayedNotes = torch.LongTensor(userRecentlyPlayedNotesList[-30:])
           # pitches = userRecentlyPlayedNotes[abs(userRecentlyPlayedNotes[:, 0]-int(ntpTime()*1000)) < 2100][:, 3]
           # responseRegionInv = set()
           # for p in pitches:
           #   responseRegionInv = set(range(p -12, p+12)).union(responseRegionInv)
-          pitch = note[3]
-          responseRegionInv = list(range(12 + 24 * ((pitch - 12)// 24), 36 + 24 * ((pitch - 12)// 24)))
+          # Strat 2: 2-octave block of last played notes
+          # pitch = note[3]
+          # responseRegionInv = set(range(12 + 24 * ((pitch - 12)// 24), 36 + 24 * ((pitch - 12)// 24)))
+          # responseRegion = list(set(range(0,128)) - set(responseRegionInv))
+
+          # Strat 3: last played notes and any held notes, in 2 octav eblocks
+          responseRegionInv = set()
+          for pitch in unfinishedNotes.keys():
+            responseRegionInv = set(range(12 + 24 * ((pitch - 12)// 24), 36 + 24 * ((pitch - 12)// 24))).union(responseRegionInv)
+            # responseRegionInv = set(range(0 + 12* ((pitch)// 12), 12 + 12 * ((pitch)// 12))).union(responseRegionInv)
           responseRegion = list(set(range(0,128)) - set(responseRegionInv))
           print("Blocked-from-response area size is", len(responseRegionInv))
 
       pendingNotesBuffer = []
+    # responseRegion = list(range(60, 128)) + list(range(0, 36))
+    if 38 in controlNotesPressed:
+      responseRegion = list(range(0, 60))
+    elif 39 in controlNotesPressed:
+      responseRegion = list(range(0, 128))
 
     if (not userPlayedNoteInResponseRegion) and (not 36 in controlNotesPressed):
       maxTimeAhead = ntpTime() + 0.26*4 # one quarter note at 120bpm
+      maxTimeBehind = 1
       modelInputTokens = timeFmtToTokens(timeline).unsqueeze(0).cuda()
       timelineAddition = []
       for noteNum in range(8):
@@ -542,6 +568,9 @@ while True:
         # be careful with dividing longs in pytorch -- unintuitive
         if (frontierNote[0].item() / 1000) > maxTimeAhead:
           print("Ahead of max time, breaking at", noteNum)
+          break
+        if not (37 in controlNotesPressed) and ((frontierNote[0].item() / 1000) < (ntpTime() - maxTimeBehind)):
+          print("Too far behind, breaking")
           break
         pendingPlayNotes = list(filter(lambda x: x["midi"]["channel"] == 0 and x["midi"]["type"] == "note_on", pendingNotesBuffer))
         if len(pendingPlayNotes) > 0:
@@ -557,10 +586,11 @@ while True:
               logits = model.forward(modelInputTokens[:, -1024:], return_loss=False)[:, -1, :] # remove seq dim
             if i == 0:
               currentDueTime = frontierNote[0].item() / 1000
-              minTimeAheadMs = min(1000, max(0, 100 - 1000*(currentDueTime-ntpTime()))) # it takes approx 33*3 for one note
-              print("The last note of modelInput is ahead of right now by", currentDueTime-ntpTime(), "biasing for notes more than", minTimeAheadMs, "ms ahead")
-              # print("The last note of modelInput is ahead of the last played note by", currentDueTime-lastPlayedNoteTime)
-              logits[0][:int(minTimeAheadMs // 8)] = -1000
+              timeAvailableMs = 1000*(currentDueTime-ntpTime())
+              minTimeAheadMs = min(500, max(0, 100 - timeAvailableMs)) # it takes approx 33*3 for one note
+              print("The last note of modelInput is ahead of right now by", timeAvailableMs, "biasing for notes more than", minTimeAheadMs, "ms ahead")
+              if minTimeAheadMs > 0:
+                logits[0][:int(minTimeAheadMs // 8)] = -1000
               # TODO: this isn't relevant if model ends up predicting a note we play next
             filtered_logits = topPFilter(logits[0], top_p).unsqueeze(0) # add batch dim back so we're [batch, num_tokens]
             probs = F.softmax(filtered_logits / temperature, dim = -1)
