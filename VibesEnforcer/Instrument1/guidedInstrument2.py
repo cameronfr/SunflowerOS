@@ -503,8 +503,8 @@ syncNTP()
 timeline = torch.LongTensor(0, 5)
 iter = 0
 # pad1-36: disable reponse gen everywhere | pad2-37: generate without input | pad3-38 -- response region lows | pad4-39: reponse region everywhere | pad5-40 -- ignore input | pad6-41 -- insert at frontier | pad7-42  | pad8-43 -- clear current input
-temperature=0.7; top_p=0.99;
-# temperature=0.8; top_p=0.999;
+temperature=0.8; top_p=0.999;
+# temperature=0.7; top_p=0.99;
 userRecentlyPlayedNotesList = []
 responseRegion = list(range(60, 128)) + list(range(0, 36))
 unfinishedNotes = {} # pitch : idx -- ignornig chan for now
@@ -522,7 +522,7 @@ while True:
   if (len(pendingPlayNotes) > 0 or (37 in controlNotesPressed)) and hasEnoughNotesWhenStarting:
     if len(pendingPlayNotes) > 0:
       if (41 in controlNotesPressed):
-        aheadNotes = timeline[:, 0] > (int(pendingPlayNotes[0]["time"] * 1000)) + 0.26*2# clear notes more than 0ms ahead
+        aheadNotes = timeline[:, 0] > (int(pendingPlayNotes[0]["time"] * 1000)) + 0 #0.26*2# clear notes more than 0ms ahead
         timeline = timeline[~aheadNotes]
         print("Cleared", torch.sum(aheadNotes), "ahead notes")
         if (torch.sum(aheadNotes) > 0):
@@ -639,7 +639,7 @@ while True:
           absTime=note[0].item()/1000; dur=note[1].item()/1000; channel=note[2].item(); pitch=note[3].item(); vel=note[4].item()
           onEvent = ["note_on", absTime, channel, pitch, vel]
           offEvent = ["note_off", absTime+dur, channel, pitch, vel]
-          if note[2] not in [10,  6, 7, 9, 2, 1, 0, 11, 3, 4, 8]:
+          if note[2] not in [10,  6, 7, 9, 2, 1, 0, 11, 3, 4, 8, 5]:
             print("Got note on unknown ch", note[3])
           else:
             msg = {"type": "notes", "notes": [onEvent, offEvent]}
