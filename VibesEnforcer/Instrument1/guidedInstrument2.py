@@ -425,8 +425,13 @@ torch.set_printoptions(precision=10, sci_mode=False)
 lastNoteTime = ntpTime()
 timeline = tokensToTimeFmt(torch.LongTensor(tokens[6:]), lastNoteTime)[0]
 
-def addTimeFmtNoteToTimeline(timeline, note):
-  # TODO: if quantize and time matches another note, need to insert sorted by pitch
+def addTimeFmtNoteToTimeline(timeline, note, quantizeIfSimulataneousHit=False):
+  # TODO: channel order when same pitch, same time note comes in is not consistent.
+
+  # timeline = testAdded.clone()
+  # debugGraphTimeFmt(timeline)
+  # note = [1679963283666, 500, 0, 50, 51]; quantizeIfSimulataneousHit=True
+
   insertLocation = torch.where(timeline[:, 0] > note[0])[0]
   if len(insertLocation) == 0:
     insertLocation = timeline.shape[0]
@@ -440,14 +445,34 @@ def addTimeFmtNoteToTimeline(timeline, note):
     print("Duplicate note (or, within 150), not inserting") # this thresh will also prevent 1/16th note spam of same note, unforunately
     return timeline, -1
 
+  if quantizeIfSimulataneousHit:
+    if insertLocation > 0 and (abs(timeline[insertLocation-1, 0] - note[0]) < simultTimeThresh):
+      note[0] = timeline[insertLocation-1, 0]
+      while (insertLocation > 0) and (timeline[insertLocation-1, 0] == note[0]) and (timeline[insertLocation-1, 3] < note[3]):
+        insertLocation -= 1
+    elif insertLocation < timeline.shape[0] and (abs(timeline[insertLocation, 0] - note[0]) < simultTimeThresh):
+      note[0] = timeline[insertLocation, 0]
+      while (insertLocation < timeline.shape[0]) and (timeline[insertLocation, 0] == note[0]) and (timeline[insertLocation, 3] > note[3]):
+        insertLocation += 1
+    # recalculate insertLocation. pitch is descending. chan is same order, but not set?
+
   newTimeline = torch.zeros((timeline.shape[0]+1, timeline.shape[1]), dtype=torch.long)
   newTimeline[:insertLocation] = timeline[:insertLocation]
   newTimeline[insertLocation] = torch.LongTensor(note)
   newTimeline[insertLocation+1:] = timeline[insertLocation:]
   return newTimeline, insertLocation
 
+
 debugGraphTimeFmt(timeline[-60:])
-previewScoreFmt(tokensToScoreFmt(timeFmtToTokens(timeline[:])), audio=False)
+previewScoreFmt(tokensToScoreFmt(timeFmtToTokens(timeline[:])), audio=True)
+testAdded = timeline.clone()
+testAdded = torch.LongTensor(0, 5)
+testAdded, _ = addTimeFmtNoteToTimeline(testAdded, [1679963283384, 500, 0, 46, 49], quantizeIfSimulataneousHit=True)
+addTimeFmtNoteToTimeline(testAdded, [1679963283666, 500, 0, 50, 51], quantizeIfSimulataneousHit=True)
+testAdded
+debugGraphTimeFmt(timeline)
+timeline
+
 # TODO: model should be able to get this chord+descending thing down.
 # TODO: why double notes? / the slighly jank timings on the responses.
 # TODO: quantize 120bpm?
@@ -497,14 +522,14 @@ while True:
   if (len(pendingPlayNotes) > 0 or (37 in controlNotesPressed)) and hasEnoughNotesWhenStarting:
     if len(pendingPlayNotes) > 0:
       if (41 in controlNotesPressed):
-        aheadNotes = timeline[:, 0] > (int(pendingPlayNotes[0]["time"] * 1000)) + 0 # clear notes more than 0ms ahead
+        aheadNotes = timeline[:, 0] > (int(pendingPlayNotes[0]["time"] * 1000)) + 0.26*2# clear notes more than 0ms ahead
         timeline = timeline[~aheadNotes]
         print("Cleared", torch.sum(aheadNotes), "ahead notes")
         if (torch.sum(aheadNotes) > 0):
           msg = {"type": "clearAllFutureForInst", "inst": -1}
           asyncio.get_event_loop().create_task(mainWebsocket.send(json.dumps(msg)))
         # Clearing ahead is good when want played notes to have big effect. But removes chance of playing "with" the model
-      addedNoteIdx = 0
+        # Takes out one or two notes max (because generation stops when there are pending play notes)
       while len(pendingPlayNotes) > 0 and not (40 in controlNotesPressed):
         midiEvent = pendingPlayNotes.pop(0)
         if midiEvent["midi"]["type"] == "note_off":
@@ -524,10 +549,10 @@ while True:
             duration = 500
           note = [int(midiEvent["time"]*1000), int(duration), selectedInstChannel, midiEvent["midi"]["note"], midiEvent["midi"]["velocity"]]
           print("Adding played note", note)
-          timeline, insertLocation = addTimeFmtNoteToTimeline(timeline, note)
+          timeline, insertLocation = addTimeFmtNoteToTimeline(timeline, note, quantizeIfSimulataneousHit=True)
+          # I feel like quantizing will put is into realm of non-humanized midis / non-performance capture midis
           if insertLocation != -1:
             unfinishedNotes[note[3]] = insertLocation
-            addedNoteIdx += 1
 
           # Strat 1: +- 12 notes on all recently played keys.
           # userRecentlyPlayedNotesList.append(note)
@@ -561,7 +586,7 @@ while True:
       maxTimeBehind = 1
       modelInputTokens = timeFmtToTokens(timeline).unsqueeze(0).cuda()
       timelineAddition = []
-      for noteNum in range(8):
+      for noteNum in range(16):
         await asyncio.sleep(0.001)
 
         frontierNote = timeline[-1] if noteNum == 0 else timelineAddition[-1]
@@ -584,14 +609,15 @@ while True:
                 print("Invalid token, stopping to preventing CUDA crash")
                 break
               logits = model.forward(modelInputTokens[:, -1024:], return_loss=False)[:, -1, :] # remove seq dim
-            if i == 0:
-              currentDueTime = frontierNote[0].item() / 1000
-              timeAvailableMs = 1000*(currentDueTime-ntpTime())
-              minTimeAheadMs = min(500, max(0, 100 - timeAvailableMs)) # it takes approx 33*3 for one note
-              print("The last note of modelInput is ahead of right now by", timeAvailableMs, "biasing for notes more than", minTimeAheadMs, "ms ahead")
-              if minTimeAheadMs > 0:
-                logits[0][:int(minTimeAheadMs // 8)] = -1000
+            # if i == 0:
+              # currentDueTime = frontierNote[0].item() / 1000
+              # timeAvailableMs = 1000*(currentDueTime-ntpTime())
+              # minTimeAheadMs = min(500, max(0, 100 - timeAvailableMs)) # it takes approx 33*3 for one note
+              # print("The last note of modelInput is ahead of right now by", timeAvailableMs, "biasing for notes more than", minTimeAheadMs, "ms ahead")
+              # if minTimeAheadMs > 0:
+              #   logits[0][:int(minTimeAheadMs // 8)] = -1000
               # TODO: this isn't relevant if model ends up predicting a note we play next
+            logits[0, 2816] = -1000 # new song token
             filtered_logits = topPFilter(logits[0], top_p).unsqueeze(0) # add batch dim back so we're [batch, num_tokens]
             probs = F.softmax(filtered_logits / temperature, dim = -1)
             sampled = torch.multinomial(probs, 1)
@@ -608,7 +634,7 @@ while True:
       for note in timelineAddition:
         withinTime = note[0].item()/1000.0 > ntpTime() + 0.02
         if note[2] < 12 and (note[3] in responseRegion or note[2] != selectedInstChannel) and withinTime:
-          timeline, _ = addTimeFmtNoteToTimeline(timeline, note)
+          timeline, _ = addTimeFmtNoteToTimeline(timeline, note, quantizeIfSimulataneousHit=True)
           print("Adding gen note to timeline, and playing", note.tolist())
           absTime=note[0].item()/1000; dur=note[1].item()/1000; channel=note[2].item(); pitch=note[3].item(); vel=note[4].item()
           onEvent = ["note_on", absTime, channel, pitch, vel]

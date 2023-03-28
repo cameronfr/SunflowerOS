@@ -49,7 +49,7 @@ while True:
 
   if msg and msg.type in ["note_on", "note_off"]:
     # Forward play input to logic on currently selected inst
-    print("Processing inport note", msg)
+    # print("Processing inport note", msg)
     if msg.channel == 0:
       midoNote = mido.Message(msg.type, channel=selectedInstChannel, note=msg.note, velocity=msg.velocity)
       outport0.send(midoNote)
@@ -75,11 +75,16 @@ while True:
       for note in notes:
         midoNote = mido.Message(note[0], channel=note[2], note=note[3], velocity=note[4])
         dueTime = note[1]
+        if dueTime < ntpTime():
+          print("Warning: received note that was already due")
         msglog.append({"msg": midoNote, "due": dueTime})
     elif wsMessage["type"] == "clearAllFutureForInst":
       instToClear = wsMessage["inst"]
       curTime = ntpTime()
-      msglog = deque([x for x in msglog if (x["msg"].channel != instToClear or x["msg"].type == "note_off")])
+      if instToClear == -1:
+        msglog = deque([x for x in msglog if (x["msg"].type == "note_off")])
+      else:
+        msglog = deque([x for x in msglog if (x["msg"].channel != instToClear or x["msg"].type == "note_off")])
     elif wsMessage["type"] == "selectInst":
       selectedInstChannel = wsMessage["inst"]
   # sort msglog by due time, since it's not guaranteed to be in order
