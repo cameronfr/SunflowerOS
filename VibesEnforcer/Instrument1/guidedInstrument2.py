@@ -570,7 +570,7 @@ unfinishedNotes = {} # pitch : idx -- ignornig chan for now
 pendingNotesBuffer = []
 debugGraphs = []
 responseRegionPredNotes = torch.LongTensor(0, 5)
-# responseRegionPredNotes on works well with max 0.52 second pred-ahead (i.e. pad 6)
+# max 0.52 second pred-ahead (i.e. pad 6) works well. responseRegionPredNotes -- still not sure if it helps or not, but definitely use it with pad 6
 while True:
   await asyncio.sleep(0.001)
   pendingPlayNotes = list(filter(lambda x: x["midi"]["channel"] == 0 and (x["midi"]["type"] == "note_on" or x["midi"]["type"] == "note_off"), pendingNotesBuffer))
@@ -653,8 +653,8 @@ while True:
       maxTimeAhead = ntpTime() + 0.26*4 # one quarter note at 120bpm
       maxTimeBehind = 1
       modelInputTimeline = timeline.clone()
-      # for n in responseRegionPredNotes:
-      #   modelInputTimeline, _ = addTimeFmtNoteToTimeline(modelInputTimeline, n, quantizeIfSimulataneousHit=True)
+      for n in responseRegionPredNotes:
+        modelInputTimeline, _ = addTimeFmtNoteToTimeline(modelInputTimeline, n, quantizeIfSimulataneousHit=True)
       debugGraphs[-1]["responseRegionPredNotes"] = responseRegionPredNotes.clone()
       debugGraphs[-1]["modelInputTimeline"] = modelInputTimeline.clone()
       modelInputTokens = timeFmtToTokens(modelInputTimeline).unsqueeze(0).cuda()
@@ -732,7 +732,7 @@ while True:
     print("Finished adding gen notes\n")
 
 
-for d in debugGraphs[-30:]:
+for d in debugGraphs[-36:-35]:
   if "timelineAddition" not in d:
     d["timelineAddition"] = []
   if "timelineAfterGenNotes" not in d:
