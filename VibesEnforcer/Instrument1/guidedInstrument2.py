@@ -451,7 +451,7 @@ def debugGraphTimeFmt(scores, title="midi", dotColors=None, showGraph=True, dotS
         c.append(colors[s[2]])
       else:
         c.append(dotColors[idx])
-    plt.scatter(x,y, c=c, marker=dotShapes[idx], s=160, alpha=1.0)
+    plt.scatter(x,y, c=c, marker=dotShapes[idx], s=160, alpha=0.7)
 
   plt.xlabel("Time")
   plt.ylabel("Pitch")
@@ -563,12 +563,14 @@ iter = 0
 # pad1-36: disable reponse gen everywhere | pad2-37: generate without input | pad3-38 -- response region lows | pad4-39: reponse region everywhere | pad5-40 -- ignore input | pad6-41 -- insert at frontier | pad7-42  | pad8-43 -- clear current input
 # temperature=0.8; top_p=0.999;
 temperature=0.7; top_p=0.99;
-# temperature=0.001; top_p=0.99;
+# temperature=0.1; top_p=0.99;
 userRecentlyPlayedNotesList = []
 responseRegion = list(range(60, 128)) + list(range(0, 36))
 unfinishedNotes = {} # pitch : idx -- ignornig chan for now
 pendingNotesBuffer = []
 debugGraphs = []
+responseRegionPredNotes = torch.LongTensor(0, 5)
+# responseRegionPredNotes on works well with max 0.52 second pred-ahead (i.e. pad 6)
 while True:
   await asyncio.sleep(0.001)
   pendingPlayNotes = list(filter(lambda x: x["midi"]["channel"] == 0 and (x["midi"]["type"] == "note_on" or x["midi"]["type"] == "note_off"), pendingNotesBuffer))
@@ -583,9 +585,10 @@ while True:
     debugGraphs.append({})
     if len(pendingPlayNotes) > 0:
       debugGraphs[-1]["timelineBeforePlayedNotes"] = timeline.clone()
+      responseRegionPredNotes = responseRegionPredNotes[responseRegionPredNotes[:, 0] > int(pendingPlayNotes[-1]["time"]*1000)]
       if (41 in controlNotesPressed):
         # aheadNotes = timeline[:, 0] > (int(pendingPlayNotes[0]["time"] * 1000)) + 0 #0.26*2# clear notes more than 0ms ahead
-        aheadNotes = timeline[:, 0] > (int(pendingPlayNotes[0]["time"] * 1000)) + 0.26*2# clear notes more than 1 quarter note ahead
+        aheadNotes = timeline[:, 0] > int(pendingPlayNotes[0]["time"] * 1000) + 0.26*2# clear notes more than 1 quarter note ahead
         timeline = timeline[~aheadNotes]
         print("Cleared", torch.sum(aheadNotes), "ahead notes")
         if (torch.sum(aheadNotes) > 0):
@@ -605,8 +608,8 @@ while True:
             print("Updated duration to", duration)
             del unfinishedNotes[midiEvent["midi"]["note"]]
         if midiEvent["midi"]["type"] == "note_on":
-          # if midiEvent["midi"]["note"] in responseRegion and (not 42 in controlNotesPressed):
-          #   userPlayedNoteInResponseRegion = True
+          if midiEvent["midi"]["note"] in responseRegion and (not 42 in controlNotesPressed):
+            userPlayedNoteInResponseRegion = True
           duration = torch.mean(timeline[-16:, 1].to(torch.float))
           if timeline.shape[0] == 0:
             duration = 500
@@ -649,7 +652,12 @@ while True:
     if (not userPlayedNoteInResponseRegion) and (not 36 in controlNotesPressed):
       maxTimeAhead = ntpTime() + 0.26*4 # one quarter note at 120bpm
       maxTimeBehind = 1
-      modelInputTokens = timeFmtToTokens(timeline).unsqueeze(0).cuda()
+      modelInputTimeline = timeline.clone()
+      # for n in responseRegionPredNotes:
+      #   modelInputTimeline, _ = addTimeFmtNoteToTimeline(modelInputTimeline, n, quantizeIfSimulataneousHit=True)
+      debugGraphs[-1]["responseRegionPredNotes"] = responseRegionPredNotes.clone()
+      debugGraphs[-1]["modelInputTimeline"] = modelInputTimeline.clone()
+      modelInputTokens = timeFmtToTokens(modelInputTimeline).unsqueeze(0).cuda()
       timelineAddition = []
       for noteNum in range(16):
         await asyncio.sleep(0.001)
@@ -714,6 +722,8 @@ while True:
         else:
           if not withinTime:
             print("Note not added or played because it would play too late")
+          elif note[3] not in responseRegion:
+            responseRegionPredNotes, _ = addTimeFmtNoteToTimeline(responseRegionPredNotes, note, quantizeIfSimulataneousHit=True)
       if len(timelineAddition) > 0:
         debugGraphs[-1]["timelineAddition"] = torch.stack(timelineAddition).clone()
       debugGraphs[-1]["timelineAfterGenNotes"] = timeline.clone()
@@ -722,10 +732,10 @@ while True:
     print("Finished adding gen notes\n")
 
 
-for d in debugGraphs[:]:
+for d in debugGraphs[-30:]:
   if "timelineAddition" not in d:
     d["timelineAddition"] = []
   if "timelineAfterGenNotes" not in d:
     d["timelineAfterGenNotes"] = []
   l = 30
-  debugGraphTimeFmt([d["timelineBeforePlayedNotes"][-l:], d["timelineAfterPlayedNotes"][-l:], d["timelineAfterGenNotes"][-l:], d["timelineAddition"][-l:]], dotColors=["black", "red", "green", "blue"], dotShapes=["1", "2", "3", "4"])
+  debugGraphTimeFmt([d["timelineBeforePlayedNotes"][-l:], d["timelineAfterPlayedNotes"][-l:], d["timelineAfterGenNotes"][-l:], d["timelineAddition"][-l:], d["responseRegionPredNotes"][-l:]], dotColors=["black", "red", "green", "blue", "orange"], dotShapes=["1", "2", "3", "4", "o"])
