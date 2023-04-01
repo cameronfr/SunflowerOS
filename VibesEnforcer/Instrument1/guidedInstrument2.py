@@ -16,6 +16,62 @@ from IPython.display import Audio, display
 %cd ./Los-Angeles-Music-Composer
 from lwa_transformer import *
 import TMIDIX
+%matplotlib inline
+
+# %cd ../
+# %cd "composer assistant"
+# import unjoined_vocab_tokenizer as ujt
+# import transformers
+
+# Composers Assistant stuff
+# model_path = os.path.join("models/unjoined/infill", 'finetuned_epoch_18_0', 'model')
+# caUnjoinedTokenizer = ujt.UnjoinedTokenizer('unjoined_include_note_duration_commands')
+# caModel = transformers.T5ForConditionalGeneration.from_pretrained(model_path).cuda()
+# caModel.eval()
+#
+# def timeFmtToTokensCA(timeFmt):
+#   timeFmt = timeline.clone()
+#   timeFmt[1:, 0] = timeFmt[1:, 0] - timeFmt[:-1, 0]
+#   timeFmt[0, 0] = 0
+#
+#   tokenStrings = [";I:0"]
+#   curTicks = 0
+#   tokenStrings
+#   tokenStrings
+#   %%timeit
+#   for i in range(timeFmt.shape[0]):
+#     note = timeFmt[i]
+#     waitTime = int(note[0].item() // (2.6404*8))
+#     duration = int(note[1].item() // (2.6404*8))
+#     pitch = note[3]
+#     tokenStrings.append(";w:{}".format(waitTime))
+#     tokenStrings.append(";d:{}".format(duration))
+#     tokenStrings.append(";N:{}".format(pitch))
+#   tokens = caUnjoinedTokenizer.encode("".join(tokenStrings))
+#   input_ids = torch.stack([torch.tensor(tokens, dtype=torch.long)]).cuda()
+#
+#   %%timeit
+#   out = caModel.generate(input_ids=input_ids,
+#                           num_return_sequences=1,
+#                           do_sample=True,
+#                           temperature=0.7,
+#                           # remove_invalid_values=True,
+#                           # top_k=100,
+#                           top_p=0.99,
+#                           min_length=1,
+#                           max_new_tokens=3,
+#                           decoder_start_token_id=caUnjoinedTokenizer.pad_id(),
+#                           pad_token_id=caUnjoinedTokenizer.pad_id(),
+#                           bos_token_id=caUnjoinedTokenizer.bos_id(),
+#                           eos_token_id=caUnjoinedTokenizer.eos_id(),
+#                           use_cache=True,
+#                           # force_words_ids=forced_ids,
+#                           # encoder_no_repeat_ngram_size=enc_no_repeat_ngram_size,
+#                           # repetition_penalty=1.01
+#                           )
+#     out
+#
+#   # gonna be a PITA, maybe try in reaper first.
 
 # For MIDI Server
 import asyncio
@@ -369,21 +425,10 @@ def timeFmtToTokens(timeFmt):
 
   return tokens
 
-def debugGraphTimeFmt(score, specialNoteIdxs=[], title="midi"):
+def debugGraphTimeFmt(scores, title="midi", dotColors=None, showGraph=True, dotShapes=None):
   colors = ['red', 'yellow', 'green', 'cyan', 'blue', 'pink', 'orange', 'purple', 'gray', 'green', 'gold', 'silver']
-  x, y, c, m = [], [], [], []
 
-  for i, s in enumerate(score):
-    x.append((s[0] - score[0, 0]) / 1000)
-    y.append(s[3])
-    if i in specialNoteIdxs:
-      m.append("P")
-      c.append("black")
-    else:
-      m.append("o")
-      c.append(colors[s[2]])
-
-  plt.figure(figsize=(14,12))
+  plt.figure(figsize=(7,6))
   ax=plt.axes(title=title)
   ax.set_facecolor('white')
   # include piano note colored rows
@@ -393,9 +438,21 @@ def debugGraphTimeFmt(score, specialNoteIdxs=[], title="midi"):
   for i in range(12,96):
     if i % 12 in [1, 3, 6, 8, 10]:
       plt.axhline(y=i, color='gray', alpha=0.3, linewidth=4)
-  # for _x, _y, _c, _m in zip(x,y,c,m):
-  plt.scatter(x,y, c=c, alpha=0.5)
-  # plt.scatter(x,y, c=c, marker=m)
+
+  startTime = min([s[0, 0].item() for s in scores if len(s) > 0])
+
+  for idx, score in enumerate(scores):
+    x, y, c, m = [], [], [], []
+    for i, s in enumerate(score):
+      x.append((s[0] - startTime) / 1000)
+      y.append(s[3])
+      m.append("o")
+      if dotColors is None:
+        c.append(colors[s[2]])
+      else:
+        c.append(dotColors[idx])
+    plt.scatter(x,y, c=c, marker=dotShapes[idx], s=160, alpha=1.0)
+
   plt.xlabel("Time")
   plt.ylabel("Pitch")
   plt.show()
@@ -445,6 +502,7 @@ def addTimeFmtNoteToTimeline(timeline, note, quantizeIfSimulataneousHit=False):
     print("Duplicate note (or, within 150), not inserting") # this thresh will also prevent 1/16th note spam of same note, unforunately
     return timeline, -1
 
+  simultTimeThresh = 62.5
   if quantizeIfSimulataneousHit:
     if insertLocation > 0 and (abs(timeline[insertLocation-1, 0] - note[0]) < simultTimeThresh):
       note[0] = timeline[insertLocation-1, 0]
@@ -503,26 +561,31 @@ syncNTP()
 timeline = torch.LongTensor(0, 5)
 iter = 0
 # pad1-36: disable reponse gen everywhere | pad2-37: generate without input | pad3-38 -- response region lows | pad4-39: reponse region everywhere | pad5-40 -- ignore input | pad6-41 -- insert at frontier | pad7-42  | pad8-43 -- clear current input
-temperature=0.8; top_p=0.999;
-# temperature=0.7; top_p=0.99;
+# temperature=0.8; top_p=0.999;
+temperature=0.7; top_p=0.99;
+# temperature=0.001; top_p=0.99;
 userRecentlyPlayedNotesList = []
 responseRegion = list(range(60, 128)) + list(range(0, 36))
 unfinishedNotes = {} # pitch : idx -- ignornig chan for now
 pendingNotesBuffer = []
+debugGraphs = []
 while True:
   await asyncio.sleep(0.001)
   pendingPlayNotes = list(filter(lambda x: x["midi"]["channel"] == 0 and (x["midi"]["type"] == "note_on" or x["midi"]["type"] == "note_off"), pendingNotesBuffer))
   userPlayedNoteInResponseRegion = False
-  if (43 in controlNotesPressed and addedNoteIdx == 0):
+  if (43 in controlNotesPressed and (len(unfinishedNotes.keys()) == 0 and timeline.shape[0] != 0)):
     print("Resetting timeline / prompt")
     timeline = torch.LongTensor(0, 5)
     unfinishedNotes = {}
-    controlNotesPressed.remove(43) # special -- make it not toggle
   hasEnoughNotesWhenStarting = (timeline.shape[0] == 0 and (len(pendingPlayNotes) > 3)) or (timeline.shape[0] != 0)
+  # if (len(pendingPlayNotes) > 0 or (37 in controlNotesPressed) or (len(unfinishedNotes.keys()) > 0)) and hasEnoughNotesWhenStarting:
   if (len(pendingPlayNotes) > 0 or (37 in controlNotesPressed)) and hasEnoughNotesWhenStarting:
+    debugGraphs.append({})
     if len(pendingPlayNotes) > 0:
+      debugGraphs[-1]["timelineBeforePlayedNotes"] = timeline.clone()
       if (41 in controlNotesPressed):
-        aheadNotes = timeline[:, 0] > (int(pendingPlayNotes[0]["time"] * 1000)) + 0 #0.26*2# clear notes more than 0ms ahead
+        # aheadNotes = timeline[:, 0] > (int(pendingPlayNotes[0]["time"] * 1000)) + 0 #0.26*2# clear notes more than 0ms ahead
+        aheadNotes = timeline[:, 0] > (int(pendingPlayNotes[0]["time"] * 1000)) + 0.26*2# clear notes more than 1 quarter note ahead
         timeline = timeline[~aheadNotes]
         print("Cleared", torch.sum(aheadNotes), "ahead notes")
         if (torch.sum(aheadNotes) > 0):
@@ -581,6 +644,8 @@ while True:
     elif 39 in controlNotesPressed:
       responseRegion = list(range(0, 128))
 
+    debugGraphs[-1]["timelineAfterPlayedNotes"] = timeline.clone()
+
     if (not userPlayedNoteInResponseRegion) and (not 36 in controlNotesPressed):
       maxTimeAhead = ntpTime() + 0.26*4 # one quarter note at 120bpm
       maxTimeBehind = 1
@@ -610,6 +675,7 @@ while True:
                 break
               logits = model.forward(modelInputTokens[:, -1024:], return_loss=False)[:, -1, :] # remove seq dim
             # if i == 0:
+              # Strat 1: only predict notes far enough ahead to be played
               # currentDueTime = frontierNote[0].item() / 1000
               # timeAvailableMs = 1000*(currentDueTime-ntpTime())
               # minTimeAheadMs = min(500, max(0, 100 - timeAvailableMs)) # it takes approx 33*3 for one note
@@ -633,9 +699,10 @@ while True:
         timelineAddition.append(note)
       for note in timelineAddition:
         withinTime = note[0].item()/1000.0 > ntpTime() + 0.02
+        # withinTime = True
         if note[2] < 12 and (note[3] in responseRegion or note[2] != selectedInstChannel) and withinTime:
-          timeline, _ = addTimeFmtNoteToTimeline(timeline, note, quantizeIfSimulataneousHit=True)
           print("Adding gen note to timeline, and playing", note.tolist())
+          timeline, _ = addTimeFmtNoteToTimeline(timeline, note, quantizeIfSimulataneousHit=True)
           absTime=note[0].item()/1000; dur=note[1].item()/1000; channel=note[2].item(); pitch=note[3].item(); vel=note[4].item()
           onEvent = ["note_on", absTime, channel, pitch, vel]
           offEvent = ["note_off", absTime+dur, channel, pitch, vel]
@@ -647,6 +714,18 @@ while True:
         else:
           if not withinTime:
             print("Note not added or played because it would play too late")
+      if len(timelineAddition) > 0:
+        debugGraphs[-1]["timelineAddition"] = torch.stack(timelineAddition).clone()
+      debugGraphs[-1]["timelineAfterGenNotes"] = timeline.clone()
     else:
       print("Skipped generation because note was in high region or controlNote")
     print("Finished adding gen notes\n")
+
+
+for d in debugGraphs[:]:
+  if "timelineAddition" not in d:
+    d["timelineAddition"] = []
+  if "timelineAfterGenNotes" not in d:
+    d["timelineAfterGenNotes"] = []
+  l = 30
+  debugGraphTimeFmt([d["timelineBeforePlayedNotes"][-l:], d["timelineAfterPlayedNotes"][-l:], d["timelineAfterGenNotes"][-l:], d["timelineAddition"][-l:]], dotColors=["black", "red", "green", "blue"], dotShapes=["1", "2", "3", "4"])
