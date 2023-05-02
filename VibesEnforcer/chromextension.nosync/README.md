@@ -17,7 +17,7 @@ cd VibesEnforcer/chromextension.nosync
 ```
 vim +19 src/pages/Content/index.jsx
 # Set your OpenAI API key on line 19
-# You can also customize the prompt here.
+# You can also customize the prompt here (mine is pretty good though. LMK if you find better ones!!)
 ```
 
 3. Build the extension.
@@ -27,6 +27,6 @@ npm run build
 ```
 
 4. Install the extension.
-- In Chrome, go to `chrome://extensions/`, enable developer mode, and click "Load unpacked". Select the `chromextension.nosync/build` folder.
+- In Chrome, go to `chrome://extensions/`, enable developer mode, and click "Load unpacked". Select the `SunflowerOS/VibesEnforcer/chromextension.nosync/build` folder.
 
 Please message me on the Sunflower [Discord](https://discord.com/invite/zYmm5JuHkW) if you have any questions or issues, or if you have any ideas and want to build something similar!
